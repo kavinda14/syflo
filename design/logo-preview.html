@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8" />
+<title>FlowTalk Logo — Vorschau</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: #fafafa; color: #111; margin: 0; padding: 48px;
+  }
+  h1 { font-weight: 600; font-size: 24px; margin-bottom: 8px; }
+  .subtitle { color: #666; margin-bottom: 40px; font-size: 14px; line-height: 1.55; }
+  .row {
+    background: #fff; border: 1px solid #eee; border-radius: 16px; padding: 40px;
+    margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .row.dark { background: #111; }
+  .row h2 { font-size: 12px; font-weight: 600; color: #888; text-transform: uppercase;
+            letter-spacing: 0.05em; margin: 0 0 24px; }
+  .row.dark h2 { color: #888; }
+  .display { display: flex; align-items: center; justify-content: center; gap: 64px; flex-wrap: wrap; }
+  .item { text-align: center; }
+  .label { font-size: 11px; color: #999; text-transform: uppercase;
+           letter-spacing: 0.05em; margin-top: 12px; }
+  .row.dark .label { color: #666; }
+  .wm-light { fill: #1a1a1a; }
+  .wm-dark { fill: #fff; }
+  .wm-style { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+              font-weight: 600; letter-spacing: -1.5px; }
+</style>
+</head>
+<body>
+
+<h1>FlowTalk — Option 5 + Welle unten</h1>
+<div class="subtitle">
+  Eine Welle <strong>oben</strong> (wie in Option 5) und eine Welle <strong>unten</strong>.
+  Hier in mehreren Größen und auf hell/dunkel.
+</div>
+
+<!-- =========== Helle Variante =========== -->
+<div class="row">
+  <h2>Auf hellem Hintergrund</h2>
+  <div class="display">
+
+    <div class="item">
+      <svg width="360" height="140" viewBox="0 0 360 140">
+        <defs>
+          <linearGradient id="gA" x1="0" x2="1">
+            <stop offset="0%" stop-color="#3B82F6"/>
+            <stop offset="50%" stop-color="#1FB6A6"/>
+            <stop offset="100%" stop-color="#34D399"/>
+          </linearGradient>
+        </defs>
+        <path d="M 38 30 Q 90 14, 140 28 T 240 26 T 322 30"
+              stroke="url(#gA)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+        <text x="180" y="88" text-anchor="middle" class="wm-style wm-light"
+              style="font-size: 56px;">FlowTalk</text>
+        <path d="M 38 110 Q 90 124, 140 112 T 240 114 T 322 110"
+              stroke="url(#gA)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      </svg>
+      <div class="label">groß (360×140)</div>
+    </div>
+
+    <div class="item">
+      <svg width="240" height="94" viewBox="0 0 360 140">
+        <defs><linearGradient id="gB" x1="0" x2="1"><stop offset="0%" stop-color="#3B82F6"/><stop offset="50%" stop-color="#1FB6A6"/><stop offset="100%" stop-color="#34D399"/></linearGradient></defs>
+        <path d="M 38 30 Q 90 14, 140 28 T 240 26 T 322 30"
+              stroke="url(#gB)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+        <text x="180" y="88" text-anchor="middle" class="wm-style wm-light"
+              style="font-size: 56px;">FlowTalk</text>
+        <path d="M 38 110 Q 90 124, 140 112 T 240 114 T 322 110"
+              stroke="url(#gB)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      </svg>
+      <div class="label">mittel (240×94)</div>
+    </div>
+
+    <div class="item">
+      <svg width="160" height="62" viewBox="0 0 360 140">
+        <defs><linearGradient id="gC" x1="0" x2="1"><stop offset="0%" stop-color="#3B82F6"/><stop offset="50%" stop-color="#1FB6A6"/><stop offset="100%" stop-color="#34D399"/></linearGradient></defs>
+        <path d="M 38 30 Q 90 14, 140 28 T 240 26 T 322 30"
+              stroke="url(#gC)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+        <text x="180" y="88" text-anchor="middle" class="wm-style wm-light"
+              style="font-size: 56px;">FlowTalk</text>
+        <path d="M 38 110 Q 90 124, 140 112 T 240 114 T 322 110"
+              stroke="url(#gC)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      </svg>
+      <div class="label">klein (160×62)</div>
+    </div>
+
+  </div>
+</div>
+
+<!-- =========== Dunkle Variante =========== -->
+<div class="row dark">
+  <h2>Auf dunklem Hintergrund (Sidebar-Stil)</h2>
+  <div class="display">
+
+    <div class="item">
+      <svg width="360" height="140" viewBox="0 0 360 140">
+        <defs><linearGradient id="gD" x1="0" x2="1"><stop offset="0%" stop-color="#3B82F6"/><stop offset="50%" stop-color="#1FB6A6"/><stop offset="100%" stop-color="#34D399"/></linearGradient></defs>
+        <path d="M 38 30 Q 90 14, 140 28 T 240 26 T 322 30"
+              stroke="url(#gD)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+        <text x="180" y="88" text-anchor="middle" class="wm-style wm-dark"
+              style="font-size: 56px;">FlowTalk</text>
+        <path d="M 38 110 Q 90 124, 140 112 T 240 114 T 322 110"
+              stroke="url(#gD)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      </svg>
+      <div class="label">groß</div>
+    </div>
+
+    <div class="item">
+      <svg width="160" height="62" viewBox="0 0 360 140">
+        <defs><linearGradient id="gE" x1="0" x2="1"><stop offset="0%" stop-color="#3B82F6"/><stop offset="50%" stop-color="#1FB6A6"/><stop offset="100%" stop-color="#34D399"/></linearGradient></defs>
+        <path d="M 38 30 Q 90 14, 140 28 T 240 26 T 322 30"
+              stroke="url(#gE)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+        <text x="180" y="88" text-anchor="middle" class="wm-style wm-dark"
+              style="font-size: 56px;">FlowTalk</text>
+        <path d="M 38 110 Q 90 124, 140 112 T 240 114 T 322 110"
+              stroke="url(#gE)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+      </svg>
+      <div class="label">klein</div>
+    </div>
+
+  </div>
+</div>
+
+<div style="text-align: center; color: #999; font-size: 13px; margin-top: 32px;">
+  Wenn das so aussieht, wie du es haben willst → sag „ja" und ich baue es als Logo in FlowTalk ein
+  (Sidebar-Header + Browser-Tab/Favicon).<br>
+  Wenn nicht: was anpassen? (z. B. Wellen weiter weg/näher dran, dünner/dicker, andere Farben)
+</div>
+
+</body>
+</html>

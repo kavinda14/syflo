@@ -1,0 +1,52 @@
+/*
+ * index.css
+ *
+ * Global base styles for FlowTalk. Kept intentionally minimal — almost all
+ * styling is done with Tailwind utility classes directly in the components.
+ * This file only sets things that cannot easily be expressed with Tailwind:
+ * - A clean system font stack (Apple-style)
+ * - Full-height layout so the app fills the entire browser window
+ * - A thin custom scrollbar that works in both the light chat area and the
+ *   dark sidebar without looking out of place
+ */
+
+@import "tailwindcss";
+
+/*
+ * Note: Tailwind v4's preflight (in @layer base) already applies the standard
+ * margin: 0 / padding: 0 / box-sizing: border-box reset. Adding our own reset
+ * here unlayered would *override* every Tailwind padding/margin utility — so we
+ * rely on preflight and only put truly app-specific rules (height, scrollbar)
+ * below.
+ */
+
+/* Make the app fill the full viewport height with no scrollbar on the page itself */
+html, body, #root {
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  /* Use the native system font on each platform for a familiar, polished feel */
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: #ffffff;
+  color: #111111;
+  /* Improve text rendering on macOS retina displays */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Thin scrollbar — keeps the UI clean without hiding the scrollbar entirely */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.15);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.25);
+}
