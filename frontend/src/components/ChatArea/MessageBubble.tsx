@@ -68,19 +68,57 @@ export function MessageBubble({ message, isStreaming, onWordRightClick, branchWo
 
   // User messages: gray bubble, right-aligned.
   if (isUser) {
+    const attachments = message.attachments || [];
+    const images = attachments.filter(a => a.mimetype.startsWith('image/'));
+    const others = attachments.filter(a => !a.mimetype.startsWith('image/'));
     return (
       <div className="flex justify-end">
-        <div
-          className="bg-gray-100 text-gray-900 select-text"
-          style={{
-            maxWidth: '42rem',
-            borderRadius: '2rem',
-            padding: '0.75rem 1.125rem',
-            lineHeight: 1.65,
-            fontSize: '15px',
-          }}
-        >
-          <p className="whitespace-pre-wrap">{message.content}</p>
+        <div className="flex flex-col items-end gap-2" style={{ maxWidth: '42rem' }}>
+          {/* Bild-Vorschauen oberhalb der Bubble */}
+          {images.length > 0 && (
+            <div className="flex flex-wrap gap-2 justify-end">
+              {images.map(img => (
+                <img
+                  key={img.id}
+                  src={img.url}
+                  alt={img.filename}
+                  className="rounded-2xl object-cover border border-gray-200"
+                  style={{ maxHeight: '14rem', maxWidth: '20rem' }}
+                  title={`${img.alias} — ${img.filename}`}
+                />
+              ))}
+            </div>
+          )}
+          {/* Andere Datei-Anhänge als kleine Chips */}
+          {others.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 justify-end">
+              {others.map(att => (
+                <a
+                  key={att.id}
+                  href={att.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-2 bg-gray-100 hover:bg-gray-200 transition-colors rounded-full px-3 py-1 text-xs text-gray-700"
+                >
+                  <span className="font-medium text-blue-600">{att.alias}</span>
+                  <span className="text-gray-500 truncate max-w-[12rem]">{att.filename}</span>
+                </a>
+              ))}
+            </div>
+          )}
+          {message.content && (
+            <div
+              className="bg-gray-100 text-gray-900 select-text"
+              style={{
+                borderRadius: '2rem',
+                padding: '0.75rem 1.125rem',
+                lineHeight: 1.65,
+                fontSize: '15px',
+              }}
+            >
+              <p className="whitespace-pre-wrap">{message.content}</p>
+            </div>
+          )}
         </div>
       </div>
     );

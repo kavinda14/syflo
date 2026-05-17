@@ -10,7 +10,7 @@
  * chunk so the UI can update in real time — exactly like ChatGPT's typing effect.
  */
 
-import type { Chat, ChatDetail, Message } from '../types';
+import type { Chat, ChatDetail, LocalAttachment, Message, Settings, SettingsUpdate } from '../types';
 
 const BASE = '/api';
 
@@ -42,19 +42,32 @@ export const api = {
     return res.json();
   },
 
-  // Sends a user message and streams the AI response.
-  // onDelta is called with each small text chunk as it arrives from the server.
-  // Returns the final saved message objects once streaming is complete.
+  // Sends a user message (mit optionalen Datei-Anhängen) und streamt die AI-Antwort.
+  // onDelta wird mit jedem Text-Chunk aufgerufen, der vom Server ankommt.
+  // Wenn Anhänge dabei sind, wird multipart/form-data verwendet — sonst JSON.
   async sendMessageStream(
     chatId: string,
     content: string,
-    onDelta: (delta: string) => void
+    onDelta: (delta: string) => void,
+    attachments: LocalAttachment[] = [],
   ): Promise<{ userMessage: Message; assistantMessage: Message }> {
-    const res = await fetch(`${BASE}/chats/${chatId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content }),
-    });
+    let res: Response;
+    if (attachments.length > 0) {
+      const fd = new FormData();
+      fd.append('content', content);
+      fd.append('aliases', JSON.stringify(attachments.map(a => a.alias)));
+      attachments.forEach(a => fd.append('files', a.file, a.file.name));
+      res = await fetch(`${BASE}/chats/${chatId}/messages`, {
+        method: 'POST',
+        body: fd, // KEIN explicit Content-Type — Browser setzt es mit Boundary
+      });
+    } else {
+      res = await fetch(`${BASE}/chats/${chatId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+    }
 
     if (!res.ok) throw new Error('Failed to send message');
 
@@ -106,5 +119,53 @@ export const api = {
   // Deletes a chat and all its children (handled recursively on the backend).
   async deleteChat(id: string): Promise<void> {
     await fetch(`${BASE}/chats/${id}`, { method: 'DELETE' });
+  },
+
+  // Renames a chat (updates only its title).
+  async renameChat(id: string, title: string): Promise<Chat> {
+    const res = await fetch(`${BASE}/chats/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    if (!res.ok) throw new Error('Failed to rename chat');
+    return res.json();
+  },
+
+  // Settings: aktiver LLM-Provider, Modelle, ob ein OpenAI-Key gesetzt ist.
+  // Der API-Key selbst wird nie zurückgeschickt — nur ein Boolean-Status.
+  async getSettings(): Promise<Settings> {
+    const res = await fetch(`${BASE}/settings`);
+    if (!res.ok) throw new Error('Failed to fetch settings');
+    return res.json();
+  },
+
+  // Lists models currently pulled in the user's local Ollama installation.
+  // Returns an empty array if Ollama isn't reachable so the modal can fall back
+  // to free-text input without surfacing an error.
+  async getOllamaModels(): Promise<{ name: string; size?: number; parameter_size?: string }[]> {
+    try {
+      const res = await fetch(`${BASE}/settings/ollama-models`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data.models) ? data.models : [];
+    } catch {
+      return [];
+    }
+  },
+
+  // Partielles Update. Felder, die nicht im Objekt sind, bleiben unverändert.
+  // Für openai_api_key: leerer String löscht den gespeicherten Key.
+  async updateSettings(patch: SettingsUpdate): Promise<Settings> {
+    const res = await fetch(`${BASE}/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update settings');
+    }
+    return res.json();
   },
 };

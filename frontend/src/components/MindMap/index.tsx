@@ -1,12 +1,13 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ReactFlow,
   Background,
   Controls,
-  MiniMap,
   MarkerType,
   BaseEdge,
   EdgeLabelRenderer,
+  Handle,
+  Position,
   getStraightPath,
   useInternalNode,
   useNodesState,
@@ -15,9 +16,23 @@ import {
   type Edge,
   type EdgeProps,
   type InternalNode,
+  type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
+import { CornerDownRight, MessageSquare, Home } from 'lucide-react';
 import type { Chat } from '../../types';
+
+// Returns the half-width/half-height of a node. Falls back to the
+// dimensions configured on the node object when the ResizeObserver
+// hasn't measured the DOM yet — without this fallback, custom-typed
+// nodes render their first frame with measured.width === undefined,
+// which collapses every floating edge to a zero-length path
+// (invisible line).
+function nodeHalfSize(n: InternalNode) {
+  const w = (n.measured?.width ?? n.width ?? 200) / 2;
+  const h = (n.measured?.height ?? n.height ?? 80) / 2;
+  return { w, h };
+}
 
 // Where a line from outerNode's center to innerNode's center crosses
 // innerNode's rectangular border. Lets edges terminate at the bubble edge
@@ -25,10 +40,8 @@ import type { Chat } from '../../types';
 function getNodeIntersection(innerNode: InternalNode, outerNode: InternalNode) {
   const ip = innerNode.internals.positionAbsolute;
   const op = outerNode.internals.positionAbsolute;
-  const w = (innerNode.measured.width ?? 0) / 2;
-  const h = (innerNode.measured.height ?? 0) / 2;
-  const ow = (outerNode.measured.width ?? 0) / 2;
-  const oh = (outerNode.measured.height ?? 0) / 2;
+  const { w, h } = nodeHalfSize(innerNode);
+  const { w: ow, h: oh } = nodeHalfSize(outerNode);
 
   const x2 = ip.x + w;
   const y2 = ip.y + h;
@@ -89,6 +102,122 @@ function FloatingEdge({ id, source, target, markerEnd, style, label, labelStyle 
 
 const edgeTypes = { floating: FloatingEdge };
 
+// Inhalt eines Mindmap-Knotens. Zeigt den Verzweigungsanlass, den Titel
+// und einen Auszug aus der ersten Nutzer-Frage — beim Hover wird der
+// Auszug nicht mehr gekürzt, damit man den vollen Text sehen kann.
+interface ChatNodeData {
+  title: string;
+  parentWord?: string | null;
+  preview?: string | null;
+  messageCount?: number;
+  color: string;
+  isRoot: boolean;
+}
+
+function ChatNodeView({ data }: NodeProps) {
+  const { title, parentWord, preview, messageCount, color, isRoot } = data as unknown as ChatNodeData;
+  const [hovered, setHovered] = useState(false);
+
+  // Inline-Style statt Tailwind-Klasse für das line-clamp — vermeidet
+  // mögliche Cascade-Layer-Konflikte mit Tailwind v4.
+  const previewStyle: React.CSSProperties = hovered
+    ? { display: 'block' }
+    : {
+        display: '-webkit-box',
+        WebkitBoxOrient: 'vertical',
+        WebkitLineClamp: 2,
+        overflow: 'hidden',
+      };
+
+  // Unsichtbare Handles als Anker für Floating Edges — React Flow braucht
+  // mindestens je einen Source- und Target-Handle, sonst sind die Edges
+  // null-gehandled und werden gar nicht erst gerendert (Fehler #008).
+  const handleStyle: React.CSSProperties = {
+    opacity: 0,
+    width: 1,
+    height: 1,
+    border: 'none',
+    background: 'transparent',
+    pointerEvents: 'none',
+  };
+
+  // Wurzelknoten bleibt stilistisch in der gleichen Designsprache (flache Farbe,
+  // gleiche Schatten-Art). Prominenz kommt durch Größe, Schatten-Intensität und
+  // ein Badge — nicht durch Gradient/Ring/Glow.
+  const baseShadow = isRoot
+    ? '0 14px 36px rgba(0,0,0,0.35)'
+    : '0 4px 12px rgba(0,0,0,0.15)';
+  const hoverShadow = isRoot
+    ? '0 20px 48px rgba(0,0,0,0.4)'
+    : '0 12px 30px rgba(0,0,0,0.25)';
+
+  return (
+    <div
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      className="relative transition-all duration-150"
+      style={{
+        background: color,
+        color: 'white',
+        width: isRoot ? 360 : 220,
+        padding: isRoot ? '22px 26px' : '12px 14px',
+        borderRadius: 16,
+        boxShadow: hovered ? hoverShadow : baseShadow,
+        transform: hovered ? 'scale(1.03)' : 'scale(1)',
+      }}
+    >
+      <Handle type="target" position={Position.Top} style={handleStyle} isConnectable={false} />
+      <Handle type="source" position={Position.Bottom} style={handleStyle} isConnectable={false} />
+
+      {/* Root-Badge: macht sofort klar, dass dies der Wurzelknoten ist.
+          Gleiche Optik wie das Verzweigungs-Badge bei Kindern (Icon + Versalien),
+          nur etwas prominenter (font-semibold + bisschen mehr opacity). */}
+      {isRoot && (
+        <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider opacity-90 font-semibold mb-2">
+          <Home size={12} />
+          <span>Main Topic</span>
+        </div>
+      )}
+
+      {/* Verzweigungs-Badge: das Wort, durch das dieser Chat entstanden ist */}
+      {parentWord && (
+        <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider opacity-80 mb-1">
+          <CornerDownRight size={10} />
+          <span className="truncate">{parentWord}</span>
+        </div>
+      )}
+
+      {/* Titel */}
+      <div
+        className="font-semibold leading-tight break-words"
+        style={{ fontSize: isRoot ? 22 : 13 }}
+      >
+        {title}
+      </div>
+
+      {/* Auszug aus der ersten Nutzer-Frage — beim Hover wird das Clamp aufgehoben */}
+      {preview && (
+        <div
+          className="mt-1.5 text-[11px] italic leading-snug opacity-90 break-words"
+          style={previewStyle}
+        >
+          „{preview}"
+        </div>
+      )}
+
+      {/* Footer: Anzahl Nachrichten */}
+      {typeof messageCount === 'number' && messageCount > 0 && (
+        <div className="mt-2 flex items-center gap-1 text-[10px] opacity-70">
+          <MessageSquare size={10} />
+          <span>{messageCount}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const nodeTypes = { chat: ChatNodeView };
+
 interface Props {
   chats: Chat[];
   activeChatId?: string | null;
@@ -101,7 +230,9 @@ const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'
 // non-root parent fans its children in an arc centered on its own outward
 // direction, so a subtree always extends *away* from the center — never back
 // toward it and never collapsed onto a single ray.
-const RADIUS_STEP = 260;
+// Radius zwischen Tiefenebenen. Vergrößert gegenüber dem ursprünglichen Wert,
+// damit die jetzt größeren, mehrzeiligen Knoten nicht überlappen.
+const RADIUS_STEP = 360;
 // Maximum angular spread for a non-root parent's children. Prevents single-
 // child chains from collapsing onto one straight line: even with one child,
 // a small offset is applied so descendants curve outward instead of stacking.
@@ -171,24 +302,24 @@ export function buildLayout(chats: Chat[]): { nodes: Node[]; edges: Edge[] } {
   const addNodes = (chat: Chat, depth: number) => {
     const color = COLORS[depth % COLORS.length];
     const isRoot = depth === 0;
+    // Maße direkt am Node-Objekt setzen, damit React Flow sie ab dem ersten
+    // Render kennt. Sonst rechnet FloatingEdge mit width/height = 0 und der
+    // Edge-Pfad kollabiert zu Länge 0 → unsichtbare Linie.
+    const width = isRoot ? 360 : 220;
+    const estimatedHeight = (isRoot ? 22 : 0) + (chat.parent_word ? 18 : 0) + (isRoot ? 32 : 22) + (chat.preview ? 36 : 0) + ((chat.message_count ?? 0) > 0 ? 18 : 0) + (isRoot ? 44 : 24);
     nodes.push({
       id: chat.id,
+      type: 'chat',
       position: posMap[chat.id] || { x: 0, y: 0 },
-      data: { label: chat.title, word: chat.parent_word },
-      style: {
-        background: color,
-        color: 'white',
-        border: 'none',
-        borderRadius: isRoot ? '20px' : '12px',
-        padding: isRoot ? '22px 32px' : '14px 20px',
-        fontSize: isRoot ? '16px' : '13px',
-        fontWeight: isRoot ? '700' : '500',
-        minWidth: isRoot ? '180px' : '140px',
-        maxWidth: isRoot ? '240px' : '200px',
-        textAlign: 'center',
-        boxShadow: isRoot
-          ? '0 8px 24px rgba(0,0,0,0.18)'
-          : '0 4px 12px rgba(0,0,0,0.15)',
+      width,
+      height: estimatedHeight,
+      data: {
+        title: chat.title,
+        parentWord: chat.parent_word,
+        preview: chat.preview,
+        messageCount: chat.message_count,
+        color,
+        isRoot,
       },
     });
 
@@ -253,6 +384,7 @@ export function MindMap({ chats, activeChatId, onSelect }: Props) {
       <ReactFlow
         nodes={nodes}
         edges={edges}
+        nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
@@ -262,7 +394,6 @@ export function MindMap({ chats, activeChatId, onSelect }: Props) {
       >
         <Background color="#e0e7ff" gap={20} />
         <Controls />
-        <MiniMap nodeColor={(n) => (n.style?.background as string) || '#3b82f6'} />
       </ReactFlow>
     </div>
   );

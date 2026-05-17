@@ -12,6 +12,7 @@ mkdir -p "$LOG_DIR"
 cd "$FLOWTALK_DIR"
 
 echo "🚀 FlowTalk wird gestartet..."
+echo ""
 
 # Rekursiv einen Prozess samt aller Nachfahren beenden.
 # Wichtig, weil $BACKEND_PID/$FRONTEND_PID nur die Bash-Subshell sind —
@@ -29,7 +30,7 @@ kill_tree() {
 # Aufräumen beim Beenden (Ctrl+C, Cmd+W, kill)
 cleanup() {
   echo ""
-  echo "⏹️  Beende FlowTalk..."
+  echo "Beende FlowTalk..."
   kill_tree "$BACKEND_PID"
   kill_tree "$FRONTEND_PID"
   kill_tree "$OLLAMA_PID"
@@ -53,7 +54,7 @@ for pid in $(pgrep -f "$SCRIPT_PATH" 2>/dev/null || true); do
   cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
   case "$cmd" in
     *bash*"$SCRIPT_PATH"*|*sh*"$SCRIPT_PATH"*|"$SCRIPT_PATH"*)
-      [[ "$killed_any" == 0 ]] && echo "🔍 Schließe vorherige FlowTalk-Instanzen..."
+      [[ "$killed_any" == 0 ]] && echo "Schließe vorherige FlowTalk-Instanzen..."
       killed_any=1
       pid_tty=$(ps -p "$pid" -o tty= 2>/dev/null | tr -d ' ' || true)
       kill -TERM "$pid" 2>/dev/null || true
@@ -81,7 +82,7 @@ done
 for port in 3001 5173 5174 5175 5176 5177 5178; do
   leftover=$(lsof -t -iTCP:$port -sTCP:LISTEN 2>/dev/null || true)
   if [[ -n "$leftover" ]]; then
-    echo "🧹 Räume Port $port (PID $leftover)..."
+    echo "Räume Port $port (PID $leftover)..."
     kill -TERM $leftover 2>/dev/null || true
   fi
 done
@@ -102,52 +103,52 @@ wait_for() {
 
 # 1. Ollama
 if curl -s http://localhost:11434/api/tags >/dev/null 2>&1; then
-  echo "🤖 Ollama läuft bereits"
+  echo "Ollama läuft bereits"
 else
   if ! command -v ollama >/dev/null 2>&1; then
-    echo "❌ FEHLER: 'ollama' ist nicht installiert (brew install ollama)"
+    echo "FEHLER: 'ollama' ist nicht installiert (brew install ollama)"
     exit 1
   fi
-  echo "🤖 Starte Ollama..."
+  echo "Starte Ollama..."
   ollama serve >"$LOG_DIR/ollama.log" 2>&1 &
   OLLAMA_PID=$!
   if wait_for http://localhost:11434/api/tags 20; then
-    echo "🤖 Ollama bereit ✅"
+    echo "Ollama bereit"
   else
-    echo "🤖 Ollama antwortet nicht ❌ (siehe $LOG_DIR/ollama.log)"
+    echo "Ollama antwortet nicht (siehe $LOG_DIR/ollama.log)"
   fi
 fi
 
 # 2. Backend
-echo "⚙️  Starte Backend (Port 3001)..."
+echo "Starte Backend (Port 3001)..."
 (cd "$FLOWTALK_DIR/backend" && npm run dev) >"$LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 if wait_for http://localhost:3001/api/chats 20; then
-  echo "⚙️  Backend bereit ✅"
+  echo "Backend bereit"
 else
-  echo "⚙️  Backend antwortet nicht ❌ (siehe $LOG_DIR/backend.log)"
+  echo "Backend antwortet nicht (siehe $LOG_DIR/backend.log)"
 fi
 
 # 3. Frontend
-echo "🎨 Starte Frontend (Port 5173)..."
+echo "Starte Frontend (Port 5173)..."
 (cd "$FLOWTALK_DIR/frontend" && npm run dev) >"$LOG_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 if wait_for http://localhost:5173 30; then
-  echo "🎨 Frontend bereit ✅"
-  echo "🌐 Öffne Browser..."
+  echo "Frontend bereit"
+  echo "Öffne Browser..."
   open http://localhost:5173
 else
-  echo "🎨 Frontend antwortet nicht ❌ (siehe $LOG_DIR/frontend.log)"
+  echo "Frontend antwortet nicht (siehe $LOG_DIR/frontend.log)"
 fi
 
 echo ""
 echo "✅ FlowTalk läuft!"
-echo "   🎨 Frontend: http://localhost:5173"
-echo "   ⚙️  Backend:  http://localhost:3001"
-echo "   🤖 Ollama:   http://localhost:11434"
-echo "   📂 Logs:     $LOG_DIR"
+echo "   Frontend: http://localhost:5173"
+echo "   Backend:  http://localhost:3001"
+echo "   Ollama:   http://localhost:11434"
+echo "   Logs:     $LOG_DIR"
 echo ""
-echo "⏹️  Drücke Ctrl+C zum Beenden."
+echo "Drücke Ctrl+C zum Beenden."
 
 # Auf Beenden warten
 wait

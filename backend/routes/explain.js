@@ -8,20 +8,14 @@
  */
 
 const express = require('express');
-const OpenAI = require('openai');
+const { getLLMClient } = require('../llm');
 
-module.exports = () => {
+module.exports = (db) => {
   // router is created inside the factory so each call gets a fresh instance.
   // If defined at module level, multiple createApp() calls (e.g. in tests)
   // would stack handlers on the same router, causing the first handler's
   // closure to handle all requests regardless of the current mock.
   const router = express.Router();
-
-  // Reuse the OpenAI SDK pointed at the local Ollama server — no API costs.
-  const openai = new OpenAI({
-    baseURL: 'http://localhost:11434/v1',
-    apiKey: 'ollama',
-  });
 
   // POST /api/explain
   // Accepts a word and optional surrounding context, returns a short explanation.
@@ -30,11 +24,12 @@ module.exports = () => {
     if (!word) return res.status(400).json({ error: 'word is required' });
 
     try {
+      const { client, model } = getLLMClient(db);
       // Ask the model for a short, plain-text definition only — no example
       // sentence, no markdown formatting. The popup renders the response as
       // plain text, so any ** or # tokens would show up literally.
-      const completion = await openai.chat.completions.create({
-        model: 'phi4',
+      const completion = await client.chat.completions.create({
+        model,
         messages: [
           {
             role: 'system',

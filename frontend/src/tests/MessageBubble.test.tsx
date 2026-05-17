@@ -99,12 +99,13 @@ describe('MessageBubble – streaming cursor', () => {
     expect(container.querySelector('.animate-pulse')).toBeInTheDocument();
   });
 
-  it('shows the cursor even when content is empty (start of stream)', () => {
+  it('shows the thinking indicator when content is empty (start of stream)', () => {
     const emptyMsg: Message = { ...assistantMessage, content: '' };
     const { container } = render(
       <MessageBubble message={emptyMsg} isStreaming={true} onWordRightClick={vi.fn()} />
     );
-    expect(container.querySelector('.animate-pulse')).toBeInTheDocument();
+    // Empty stream → the FlowTalk wave-loop ThinkingIndicator is rendered
+    expect(container.querySelector('.ft-thinking-wave')).toBeInTheDocument();
   });
 });
 

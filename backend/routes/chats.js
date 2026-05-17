@@ -13,11 +13,33 @@ module.exports = (db) => {
     res.json(chats);
   });
 
-  // Get full chat tree
+  // Get full chat tree.
+  // Each node carries a `preview` (first user message, truncated) and
+  // `message_count` so the mindmap can show what each chat is actually about
+  // instead of just titles.
   router.get('/tree', (req, res) => {
-    const all = db.prepare('SELECT * FROM chats ORDER BY created_at ASC').all();
+    const all = db.prepare(`
+      SELECT c.*,
+        (SELECT m.content
+           FROM messages m
+          WHERE m.chat_id = c.id AND m.role = 'user'
+          ORDER BY m.created_at ASC
+          LIMIT 1) AS preview,
+        (SELECT COUNT(*) FROM messages m WHERE m.chat_id = c.id) AS message_count
+      FROM chats c
+      ORDER BY c.created_at ASC
+    `).all();
+
+    const PREVIEW_LIMIT = 140;
     const map = {};
-    all.forEach(c => { map[c.id] = { ...c, children: [] }; });
+    all.forEach(c => {
+      const preview = c.preview
+        ? (c.preview.length > PREVIEW_LIMIT
+            ? c.preview.slice(0, PREVIEW_LIMIT).trimEnd() + '…'
+            : c.preview)
+        : null;
+      map[c.id] = { ...c, preview, children: [] };
+    });
     const roots = [];
     all.forEach(c => {
       if (c.parent_id && map[c.parent_id]) {
@@ -29,7 +51,7 @@ module.exports = (db) => {
     res.json(roots);
   });
 
-  // Get single chat with messages
+  // Get single chat with messages (and attachments per message)
   router.get('/:id', (req, res) => {
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(req.params.id);
     if (!chat) return res.status(404).json({ error: 'Chat not found' });
@@ -38,11 +60,27 @@ module.exports = (db) => {
       'SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at ASC'
     ).all(req.params.id);
 
+    const attachmentsByMsg = db.prepare(
+      `SELECT id, message_id, alias, filename, mimetype, size
+       FROM attachments WHERE chat_id = ? ORDER BY created_at ASC`
+    ).all(req.params.id).reduce((acc, a) => {
+      (acc[a.message_id] ||= []).push({
+        id: a.id, alias: a.alias, filename: a.filename, mimetype: a.mimetype, size: a.size,
+        url: `/uploads/${req.params.id}/${a.id}-${a.filename}`,
+      });
+      return acc;
+    }, {});
+
+    const messagesWithAttachments = messages.map(m => ({
+      ...m,
+      attachments: attachmentsByMsg[m.id] || [],
+    }));
+
     const children = db.prepare(
       'SELECT * FROM chats WHERE parent_id = ? ORDER BY created_at ASC'
     ).all(req.params.id);
 
-    res.json({ ...chat, messages, children });
+    res.json({ ...chat, messages: messagesWithAttachments, children });
   });
 
   // Create new chat

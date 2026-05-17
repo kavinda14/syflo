@@ -14,7 +14,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { X, GitBranch, Loader2 } from 'lucide-react';
+import { X, GitBranch, Loader2, Copy, Check } from 'lucide-react';
 import type { WordPopup } from '../../types';
 
 interface Props {
@@ -27,6 +27,7 @@ interface Props {
 
 export function FloatingPopup({ popup, explanation, loading, onClose, onOpenChildChat }: Props) {
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  const [copied, setCopied] = useState(false);
 
   // Recalculate the popup position whenever a new word is right-clicked.
   // Offset by 12px from the click point and clamp so the card stays on screen.
@@ -38,7 +39,19 @@ export function FloatingPopup({ popup, explanation, loading, onClose, onOpenChil
       x: Math.min(popup.x + 12, window.innerWidth - w - 16),
       y: Math.min(popup.y + 12, window.innerHeight - h - 16),
     });
+    setCopied(false);
   }, [popup]);
+
+  const handleCopy = async () => {
+    if (!popup) return;
+    try {
+      await navigator.clipboard.writeText(popup.word);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error('Failed to copy to clipboard:', err);
+    }
+  };
 
   // Don't render anything when no word has been clicked.
   if (!popup) return null;
@@ -57,12 +70,23 @@ export function FloatingPopup({ popup, explanation, loading, onClose, onOpenChil
           <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-0.5">Definition</p>
           <p className="font-semibold text-sm text-gray-900 break-words">"{headerText}"</p>
         </div>
-        <button
-          onClick={onClose}
-          className="shrink-0 -mr-1 -mt-0.5 p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-        >
-          <X size={15} />
-        </button>
+        <div className="shrink-0 flex items-center gap-0.5 -mr-1 -mt-0.5">
+          <button
+            onClick={handleCopy}
+            aria-label={copied ? 'Copied' : 'Copy text'}
+            title={copied ? 'Copied!' : 'Copy text'}
+            className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            {copied ? <Check size={15} className="text-green-600" /> : <Copy size={15} />}
+          </button>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="p-1 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            <X size={15} />
+          </button>
+        </div>
       </div>
 
       {/* Body: shows a spinner while the explanation is loading, then the text */}

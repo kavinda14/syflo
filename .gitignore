@@ -15,6 +15,9 @@ build/
 *.sqlite
 *.sqlite3
 
+# User-uploaded message attachments
+uploads/
+
 # Logs
 logs/
 *.log

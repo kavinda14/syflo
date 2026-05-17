@@ -17,8 +17,11 @@ describe('Sidebar', () => {
     onSelect: vi.fn(),
     onNewChat: vi.fn(),
     onDelete: vi.fn(),
+    onRename: vi.fn(),
     viewMode: 'chat' as const,
     onToggleView: vi.fn(),
+    settings: null,
+    onSettingsChange: vi.fn(),
   };
 
   it('renders root chat titles', () => {
@@ -29,13 +32,11 @@ describe('Sidebar', () => {
 
   it('does not show child chats in default flat view', () => {
     render(<Sidebar {...defaultProps} />);
-    // Default view only shows root-level chats
     expect(screen.queryByText('Child Chat')).not.toBeInTheDocument();
   });
 
   it('shows child chat after clicking a root (parent_word badge removed)', () => {
     render(<Sidebar {...defaultProps} />);
-    // Click on 'Second Chat' to expand its children
     fireEvent.click(screen.getByText('Second Chat'));
     expect(screen.getByText('Child Chat')).toBeInTheDocument();
     expect(screen.queryByText('quantum')).not.toBeInTheDocument();
@@ -80,11 +81,29 @@ describe('Sidebar', () => {
     expect(activeItem?.className).toContain('bg-blue-50');
   });
 
-  it('opens a confirmation dialog when the trash icon is clicked instead of deleting immediately', () => {
+  it('does not render a trash icon (delete moved to context menu)', () => {
+    render(<Sidebar {...defaultProps} />);
+    expect(screen.queryByTitle('Delete chat')).not.toBeInTheDocument();
+  });
+
+  it('shows the full chat title as a tooltip on the row', () => {
+    render(<Sidebar {...defaultProps} />);
+    const row = screen.getByText('First Chat').closest('div');
+    expect(row?.getAttribute('title')).toBe('First Chat');
+  });
+
+  it('opens the context menu on right-click with rename and delete options', () => {
+    render(<Sidebar {...defaultProps} />);
+    fireEvent.contextMenu(screen.getByText('First Chat'));
+    expect(screen.getByText('Rename')).toBeInTheDocument();
+    expect(screen.getByText('Delete')).toBeInTheDocument();
+  });
+
+  it('clicking Delete in context menu opens the confirmation dialog', () => {
     const onDelete = vi.fn();
     render(<Sidebar {...defaultProps} onDelete={onDelete} />);
-    const deleteButtons = screen.getAllByTitle('Delete chat');
-    fireEvent.click(deleteButtons[0]);
+    fireEvent.contextMenu(screen.getByText('First Chat'));
+    fireEvent.click(screen.getByText('Delete'));
     expect(screen.getByText('Delete chat?')).toBeInTheDocument();
     expect(onDelete).not.toHaveBeenCalled();
   });
@@ -92,7 +111,8 @@ describe('Sidebar', () => {
   it('cancel in the confirmation dialog closes it without deleting', () => {
     const onDelete = vi.fn();
     render(<Sidebar {...defaultProps} onDelete={onDelete} />);
-    fireEvent.click(screen.getAllByTitle('Delete chat')[0]);
+    fireEvent.contextMenu(screen.getByText('First Chat'));
+    fireEvent.click(screen.getByText('Delete'));
     fireEvent.click(screen.getByText('Cancel'));
     expect(screen.queryByText('Delete chat?')).not.toBeInTheDocument();
     expect(onDelete).not.toHaveBeenCalled();
@@ -101,10 +121,43 @@ describe('Sidebar', () => {
   it('confirming the dialog calls onDelete with the right id', () => {
     const onDelete = vi.fn();
     render(<Sidebar {...defaultProps} onDelete={onDelete} />);
-    fireEvent.click(screen.getAllByTitle('Delete chat')[0]);
-    // The Delete inside the modal — distinguish from the title "Delete chat?"
+    fireEvent.contextMenu(screen.getByText('First Chat'));
+    // Click Delete in context menu (opens modal)
+    fireEvent.click(screen.getByText('Delete'));
+    // Click Delete in confirmation modal — last "Delete" in the DOM
     const deleteBtns = screen.getAllByText('Delete');
     fireEvent.click(deleteBtns[deleteBtns.length - 1]);
     expect(onDelete).toHaveBeenCalledWith('1');
+  });
+
+  it('clicking Rename switches the row to an inline editor', () => {
+    render(<Sidebar {...defaultProps} />);
+    fireEvent.contextMenu(screen.getByText('First Chat'));
+    fireEvent.click(screen.getByText('Rename'));
+    const input = screen.getByDisplayValue('First Chat');
+    expect(input).toBeInTheDocument();
+    expect(input.tagName).toBe('INPUT');
+  });
+
+  it('submitting a renamed title calls onRename with the new value', () => {
+    const onRename = vi.fn();
+    render(<Sidebar {...defaultProps} onRename={onRename} />);
+    fireEvent.contextMenu(screen.getByText('First Chat'));
+    fireEvent.click(screen.getByText('Rename'));
+    const input = screen.getByDisplayValue('First Chat');
+    fireEvent.change(input, { target: { value: 'Renamed Chat' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onRename).toHaveBeenCalledWith('1', 'Renamed Chat');
+  });
+
+  it('Escape during rename cancels without calling onRename', () => {
+    const onRename = vi.fn();
+    render(<Sidebar {...defaultProps} onRename={onRename} />);
+    fireEvent.contextMenu(screen.getByText('First Chat'));
+    fireEvent.click(screen.getByText('Rename'));
+    const input = screen.getByDisplayValue('First Chat');
+    fireEvent.change(input, { target: { value: 'Should not stick' } });
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(onRename).not.toHaveBeenCalled();
   });
 });

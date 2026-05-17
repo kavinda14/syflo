@@ -1,0 +1,526 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<title>FlowTalk · 15 Loading-Animationen</title>
+<style>
+  :root {
+    --c1: #3B82F6;
+    --c2: #1FB6A6;
+    --c3: #34D399;
+    --bg: #fafafa;
+    --card: #ffffff;
+    --text: #1a1a1a;
+    --muted: #6b7280;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 40px 24px 80px;
+  }
+  h1 { font-weight: 600; letter-spacing: -0.5px; margin: 0 0 8px; }
+  p.lede {
+    color: var(--muted);
+    margin: 0 0 32px;
+    max-width: 720px;
+    line-height: 1.5;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 20px;
+    max-width: 1320px;
+  }
+  .card {
+    background: var(--card);
+    border: 1px solid #e5e7eb;
+    border-radius: 14px;
+    padding: 22px 20px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+  }
+  .card h2 { margin: 0 0 2px; font-size: 16px; font-weight: 600; }
+  .card .meta { color: var(--muted); font-size: 12px; margin: 0 0 18px; }
+  .stage {
+    background: #f3f4f6;
+    border-radius: 10px;
+    height: 120px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+  }
+  .bubble {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    background: #fff;
+    border: 1px solid #e5e7eb;
+    padding: 10px 16px;
+    border-radius: 18px;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04);
+    min-height: 36px;
+  }
+  .bubble .label { color: var(--muted); font-size: 12px; }
+  .desc { font-size: 12px; line-height: 1.5; color: #374151; margin: 0; }
+  .desc strong { color: var(--text); }
+  .defs { position: absolute; width: 0; height: 0; }
+
+  /* ─────── 1 · Logo-Wave Draw-Loop ─────── */
+  .a1 { width: 56px; height: 26px; overflow: visible; }
+  .a1 path {
+    fill: none;
+    stroke: url(#grad);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-dasharray: 70;
+    animation: a1-draw 1.8s ease-in-out infinite;
+  }
+  .a1 .bot { animation-delay: 0.3s; }
+  @keyframes a1-draw {
+    0%   { stroke-dashoffset: 70; }
+    50%  { stroke-dashoffset: 0; }
+    100% { stroke-dashoffset: -70; }
+  }
+
+  /* ─────── 2 · Morphing Single Wave ─────── */
+  .a2 { width: 60px; height: 20px; }
+  .a2 path {
+    fill: none;
+    stroke: url(#grad);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+  }
+
+  /* ─────── 3 · Orbiting Dots ─────── */
+  .a3 {
+    width: 32px; height: 32px;
+    position: relative;
+    animation: a3-rot 1.6s linear infinite;
+  }
+  .a3 .o-dot {
+    position: absolute; width: 8px; height: 8px;
+    border-radius: 50%;
+    left: 50%; top: 50%;
+    margin: -4px;
+  }
+  .a3 .o-dot:nth-child(1) { background: var(--c1); transform: rotate(0deg)   translateX(12px); }
+  .a3 .o-dot:nth-child(2) { background: var(--c2); transform: rotate(120deg) translateX(12px); }
+  .a3 .o-dot:nth-child(3) { background: var(--c3); transform: rotate(240deg) translateX(12px); }
+  @keyframes a3-rot { to { transform: rotate(360deg); } }
+
+  /* ─────── 4 · Sonar Pulse ─────── */
+  .a4 { width: 36px; height: 36px; position: relative; }
+  .a4 .ring {
+    position: absolute; inset: 0;
+    border: 2px solid var(--c2);
+    border-radius: 50%;
+    opacity: 0;
+    animation: a4-pulse 1.6s ease-out infinite;
+  }
+  .a4 .ring:nth-child(2) { animation-delay: 0.4s; border-color: var(--c1); }
+  .a4 .ring:nth-child(3) { animation-delay: 0.8s; border-color: var(--c3); }
+  .a4 .core {
+    position: absolute; inset: 12px;
+    background: linear-gradient(135deg, var(--c1), var(--c2), var(--c3));
+    border-radius: 50%;
+  }
+  @keyframes a4-pulse {
+    0%   { transform: scale(0.4); opacity: 0.9; }
+    100% { transform: scale(1.4); opacity: 0; }
+  }
+
+  /* ─────── 5 · Heartbeat / EKG ─────── */
+  .a5 { width: 64px; height: 24px; }
+  .a5 path {
+    fill: none;
+    stroke: url(#grad);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-dasharray: 80;
+    animation: a5-ekg 1.4s linear infinite;
+  }
+  @keyframes a5-ekg {
+    from { stroke-dashoffset: 80; }
+    to   { stroke-dashoffset: -80; }
+  }
+
+  /* ─────── 6 · Liquid Blob ─────── */
+  .a6 { width: 36px; height: 36px; }
+  .a6 ellipse {
+    fill: url(#grad-radial);
+    transform-origin: center;
+    transform-box: fill-box;
+    animation: a6-blob 2.2s ease-in-out infinite;
+  }
+  @keyframes a6-blob {
+    0%, 100% { transform: scale(1, 1)     rotate(0deg);   }
+    25%      { transform: scale(1.15, 0.85) rotate(20deg); }
+    50%      { transform: scale(0.9, 1.1)  rotate(-15deg); }
+    75%      { transform: scale(1.1, 0.95) rotate(10deg); }
+  }
+
+  /* ─────── 7 · Conic Spinner ─────── */
+  .a7 {
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: conic-gradient(var(--c1), var(--c2), var(--c3), var(--c1));
+    mask: radial-gradient(circle, transparent 50%, black 52%);
+    -webkit-mask: radial-gradient(circle, transparent 50%, black 52%);
+    animation: a7-spin 0.9s linear infinite;
+  }
+  @keyframes a7-spin { to { transform: rotate(360deg); } }
+
+  /* ─────── 8 · Typing Cursor ─────── */
+  .a8 {
+    display: inline-flex; align-items: baseline; gap: 4px;
+  }
+  .a8 .glyph {
+    font-weight: 600; font-size: 16px;
+    background: linear-gradient(90deg, var(--c1), var(--c2), var(--c3));
+    background-size: 200% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    animation: a8-shimmer 2.5s linear infinite;
+  }
+  .a8 .cursor {
+    display: inline-block;
+    width: 2px; height: 16px;
+    background: var(--c2);
+    animation: a8-blink 0.9s steps(2) infinite;
+  }
+  @keyframes a8-shimmer { to { background-position: -200% 0; } }
+  @keyframes a8-blink { 50% { opacity: 0; } }
+
+  /* ─────── 9 · Wave Train (laufende Wellen) ─────── */
+  .a9 {
+    width: 72px; height: 22px;
+    overflow: hidden;
+    position: relative;
+  }
+  .a9 svg {
+    position: absolute;
+    width: 144px; height: 22px;
+    animation: a9-slide 1.6s linear infinite;
+  }
+  .a9 path {
+    fill: none;
+    stroke: url(#grad);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  @keyframes a9-slide {
+    from { transform: translateX(0); }
+    to   { transform: translateX(-50%); }
+  }
+
+  /* ─────── 10 · Bouncing Squares ─────── */
+  .a10 { display: inline-flex; gap: 5px; align-items: center; height: 24px; }
+  .a10 .sq {
+    width: 8px; height: 8px;
+    border-radius: 2px;
+    animation: a10-bounce 0.9s ease-in-out infinite;
+  }
+  .a10 .sq:nth-child(1) { background: var(--c1); animation-delay: 0.0s; }
+  .a10 .sq:nth-child(2) { background: var(--c2); animation-delay: 0.15s; }
+  .a10 .sq:nth-child(3) { background: var(--c3); animation-delay: 0.30s; }
+  @keyframes a10-bounce {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50%      { transform: translateY(-8px) rotate(45deg); }
+  }
+
+  /* ─────── 11 · Vortex Spiral ─────── */
+  .a11 { width: 32px; height: 32px; animation: a11-spin 1.4s linear infinite; }
+  .a11 path {
+    fill: none;
+    stroke: url(#grad);
+    stroke-width: 2;
+    stroke-linecap: round;
+  }
+  @keyframes a11-spin { to { transform: rotate(360deg); } }
+
+  /* ─────── 12 · Gradient Comet ─────── */
+  .a12 {
+    width: 72px; height: 22px;
+    position: relative;
+    overflow: hidden;
+    border-radius: 11px;
+    background: rgba(0,0,0,0.03);
+  }
+  .a12 .trail {
+    position: absolute;
+    top: 50%; left: -20px;
+    width: 36px; height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(90deg, transparent, var(--c1), var(--c2), var(--c3));
+    transform: translateY(-50%);
+    animation: a12-fly 1.4s ease-in-out infinite;
+  }
+  @keyframes a12-fly {
+    0%   { left: -36px; opacity: 0; }
+    20%  { opacity: 1; }
+    80%  { opacity: 1; }
+    100% { left: 72px; opacity: 0; }
+  }
+
+  /* ─────── 13 · Infinity Loop ─────── */
+  .a13 { width: 56px; height: 24px; }
+  .a13 path.track {
+    fill: none;
+    stroke: rgba(31, 182, 166, 0.18);
+    stroke-width: 2.5;
+  }
+  .a13 path.head {
+    fill: none;
+    stroke: url(#grad);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-dasharray: 18 70;
+    animation: a13-dash 1.6s linear infinite;
+  }
+  @keyframes a13-dash {
+    to { stroke-dashoffset: -88; }
+  }
+
+  /* ─────── 14 · Constellation ─────── */
+  .a14 { width: 60px; height: 30px; }
+  .a14 line { stroke: url(#grad); stroke-width: 1; opacity: 0.4; }
+  .a14 circle {
+    fill: url(#grad-radial);
+    animation: a14-twinkle 1.8s ease-in-out infinite;
+  }
+  .a14 circle:nth-child(4) { animation-delay: 0.2s; }
+  .a14 circle:nth-child(5) { animation-delay: 0.4s; }
+  .a14 circle:nth-child(6) { animation-delay: 0.6s; }
+  .a14 circle:nth-child(7) { animation-delay: 0.8s; }
+  @keyframes a14-twinkle {
+    0%, 100% { transform: scale(0.7); opacity: 0.6; }
+    50%      { transform: scale(1.2); opacity: 1; }
+  }
+  .a14 circle { transform-origin: center; transform-box: fill-box; }
+
+  /* ─────── 15 · Wave Stack ─────── */
+  .a15 { width: 48px; height: 30px; }
+  .a15 path {
+    fill: none;
+    stroke: url(#grad);
+    stroke-width: 2;
+    stroke-linecap: round;
+    transform-origin: center;
+    transform-box: fill-box;
+    animation: a15-wob 1.4s ease-in-out infinite;
+  }
+  .a15 path:nth-child(1) { animation-delay: 0s;    opacity: 0.4; }
+  .a15 path:nth-child(2) { animation-delay: 0.15s; opacity: 0.7; }
+  .a15 path:nth-child(3) { animation-delay: 0.30s; opacity: 1;   }
+  @keyframes a15-wob {
+    0%, 100% { transform: scaleY(1); }
+    50%      { transform: scaleY(0.4); }
+  }
+</style>
+</head>
+<body>
+
+<h1>FlowTalk · 15 Loading-Animationen</h1>
+<p class="lede">
+  Alle Varianten nutzen den Logo-Gradient (Blau → Türkis → Grün) und sind in einer
+  Chat-Bubble dargestellt. Sag mir die Nummer der Variante, die du willst.
+</p>
+
+<svg class="defs" aria-hidden="true">
+  <defs>
+    <linearGradient id="grad" x1="0" x2="1">
+      <stop offset="0%"   stop-color="#3B82F6" />
+      <stop offset="50%"  stop-color="#1FB6A6" />
+      <stop offset="100%" stop-color="#34D399" />
+    </linearGradient>
+    <radialGradient id="grad-radial">
+      <stop offset="0%"   stop-color="#34D399" />
+      <stop offset="60%"  stop-color="#1FB6A6" />
+      <stop offset="100%" stop-color="#3B82F6" />
+    </radialGradient>
+  </defs>
+</svg>
+
+<div class="grid">
+
+  <div class="card">
+    <h2>1 · Wave Draw-Loop</h2><p class="meta">Logo-Wellen werden endlos gezeichnet</p>
+    <div class="stage"><div class="bubble">
+      <svg class="a1" viewBox="0 0 60 28">
+        <path class="top" d="M 4 10 Q 15 4, 26 10 T 56 10" />
+        <path class="bot" d="M 4 20 Q 15 26, 26 20 T 56 20" />
+      </svg>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Die <strong>zwei Logo-Wellen</strong> werden im Loop neu gezeichnet — direkter Verweis auf das Markenzeichen.</p>
+  </div>
+
+  <div class="card">
+    <h2>2 · Morphing Wave</h2><p class="meta">Eine Welle, die ihre Form ändert</p>
+    <div class="stage"><div class="bubble">
+      <svg class="a2" viewBox="0 0 60 20">
+        <path d="M 2 10 Q 15 2, 30 10 T 58 10">
+          <animate attributeName="d"
+            values="M 2 10 Q 15 2, 30 10 T 58 10;
+                    M 2 10 Q 15 18, 30 10 T 58 10;
+                    M 2 10 Q 15 2, 30 10 T 58 10"
+            dur="1.4s" repeatCount="indefinite" />
+        </path>
+      </svg>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Eine Welle, deren <strong>Pfad</strong> kontinuierlich morpht — wirkt wie sanfter Atem.</p>
+  </div>
+
+  <div class="card">
+    <h2>3 · Orbiting Dots</h2><p class="meta">Drei Punkte umkreisen ein Zentrum</p>
+    <div class="stage"><div class="bubble">
+      <div class="a3"><span class="o-dot"></span><span class="o-dot"></span><span class="o-dot"></span></div>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Drei Punkte (Blau, Türkis, Grün) <strong>orbiten</strong> wie Planeten — verspielt, technisch.</p>
+  </div>
+
+  <div class="card">
+    <h2>4 · Sonar Pulse</h2><p class="meta">Konzentrische Wellen wie Sonar</p>
+    <div class="stage"><div class="bubble">
+      <div class="a4"><span class="ring"></span><span class="ring"></span><span class="ring"></span><span class="core"></span></div>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc"><strong>Schallwellen</strong> pulsieren nach außen — passt akustisch zum Namen FlowTalk.</p>
+  </div>
+
+  <div class="card">
+    <h2>5 · Heartbeat / EKG</h2><p class="meta">Herzschlag-Linie</p>
+    <div class="stage"><div class="bubble">
+      <svg class="a5" viewBox="0 0 64 24">
+        <path d="M 0 12 L 12 12 L 16 4 L 22 20 L 28 8 L 32 12 L 64 12" />
+      </svg>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Eine <strong>EKG-Linie</strong> läuft kontinuierlich durch — wirkt "lebendig" wie Pulsschlag.</p>
+  </div>
+
+  <div class="card">
+    <h2>6 · Liquid Blob</h2><p class="meta">Organisch morphender Tropfen</p>
+    <div class="stage"><div class="bubble">
+      <svg class="a6" viewBox="0 0 36 36">
+        <ellipse cx="18" cy="18" rx="13" ry="13" />
+      </svg>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Ein <strong>Tropfen</strong> wabbert weich — Radial-Gradient, fühlt sich "AI" an.</p>
+  </div>
+
+  <div class="card">
+    <h2>7 · Conic Spinner</h2><p class="meta">Rotierender Ring im Gradient</p>
+    <div class="stage"><div class="bubble">
+      <div class="a7"></div>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Klassischer <strong>Spinner</strong> mit Conic-Gradient — minimalistisch, schnell verständlich.</p>
+  </div>
+
+  <div class="card">
+    <h2>8 · Typing Cursor</h2><p class="meta">Schreibender Stift mit Shimmer</p>
+    <div class="stage"><div class="bubble">
+      <span class="a8"><span class="glyph">FlowTalk</span><span class="cursor"></span></span>
+    </div></div>
+    <p class="desc">"FlowTalk"-Schriftzug mit <strong>wanderndem Shimmer</strong> und blinkendem Cursor.</p>
+  </div>
+
+  <div class="card">
+    <h2>9 · Wave Train</h2><p class="meta">Endlos laufende Wellen</p>
+    <div class="stage"><div class="bubble">
+      <div class="a9">
+        <svg viewBox="0 0 144 22">
+          <path d="M 0 11 Q 12 3, 24 11 T 48 11 T 72 11 T 96 11 T 120 11 T 144 11" />
+        </svg>
+      </div>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc"><strong>Wellen scrollen</strong> kontinuierlich nach links — Förderband-Effekt, hypnotisch.</p>
+  </div>
+
+  <div class="card">
+    <h2>10 · Bouncing Squares</h2><p class="meta">Hüpfende Quadrate</p>
+    <div class="stage"><div class="bubble">
+      <div class="a10"><span class="sq"></span><span class="sq"></span><span class="sq"></span></div>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Drei Quadrate <strong>hüpfen und drehen</strong> sich — geometrischer, spielerischer Twist.</p>
+  </div>
+
+  <div class="card">
+    <h2>11 · Vortex Spiral</h2><p class="meta">Drehende Spirale</p>
+    <div class="stage"><div class="bubble">
+      <svg class="a11" viewBox="0 0 32 32">
+        <path d="M 16 16 m -2 0 a 2 2 0 1 0 4 0 a 2 2 0 1 0 -4 0
+                 M 16 16 m -6 0 a 6 6 0 1 0 12 0
+                 M 16 16 m -10 0 a 10 10 0 1 0 20 0 a 10 10 0 1 0 -20 0" />
+      </svg>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Drei konzentrische <strong>Spiral-Arme</strong> rotieren — wirkt mystisch, fast wie ein Portal.</p>
+  </div>
+
+  <div class="card">
+    <h2>12 · Gradient Comet</h2><p class="meta">Komet zieht durch die Bubble</p>
+    <div class="stage"><div class="bubble">
+      <div class="a12"><span class="trail"></span></div>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Ein <strong>Komet mit Gradient-Schweif</strong> fliegt von links nach rechts — schnell, energisch.</p>
+  </div>
+
+  <div class="card">
+    <h2>13 · Infinity Loop</h2><p class="meta">Punkt läuft entlang ∞</p>
+    <div class="stage"><div class="bubble">
+      <svg class="a13" viewBox="0 0 56 24">
+        <path class="track" d="M 14 12 C 14 4, 26 4, 28 12 C 30 20, 42 20, 42 12 C 42 4, 30 4, 28 12 C 26 20, 14 20, 14 12 Z" />
+        <path class="head"  d="M 14 12 C 14 4, 26 4, 28 12 C 30 20, 42 20, 42 12 C 42 4, 30 4, 28 12 C 26 20, 14 20, 14 12 Z" />
+      </svg>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Ein Gradient-Segment läuft entlang einer <strong>Unendlichkeitsschleife</strong> — elegant, endlos.</p>
+  </div>
+
+  <div class="card">
+    <h2>14 · Constellation</h2><p class="meta">Funkelnde Sternpunkte mit Linien</p>
+    <div class="stage"><div class="bubble">
+      <svg class="a14" viewBox="0 0 60 30">
+        <line x1="8"  y1="20" x2="20" y2="8"  />
+        <line x1="20" y1="8"  x2="38" y2="22" />
+        <line x1="38" y1="22" x2="52" y2="10" />
+        <circle cx="8"  cy="20" r="2.5" />
+        <circle cx="20" cy="8"  r="2.5" />
+        <circle cx="38" cy="22" r="2.5" />
+        <circle cx="52" cy="10" r="2.5" />
+      </svg>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Knotenpunkte einer <strong>Konstellation</strong> funkeln versetzt — verweist auf Graph/Mindmap-Feature.</p>
+  </div>
+
+  <div class="card">
+    <h2>15 · Wave Stack</h2><p class="meta">Gestapelte Wellen mit Phasenversatz</p>
+    <div class="stage"><div class="bubble">
+      <svg class="a15" viewBox="0 0 48 30">
+        <path d="M 2 8  Q 12 2, 24 8  T 46 8"  />
+        <path d="M 2 15 Q 12 9, 24 15 T 46 15" />
+        <path d="M 2 22 Q 12 28, 24 22 T 46 22" />
+      </svg>
+      <span class="label">FlowTalk denkt nach…</span>
+    </div></div>
+    <p class="desc">Drei <strong>Wellen übereinander</strong>, gestaffelt pulsierend — Logo-DNA verstärkt.</p>
+  </div>
+
+</div>
+
+</body>
+</html>

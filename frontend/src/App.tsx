@@ -18,7 +18,7 @@ import { ChatArea } from './components/ChatArea';
 import { MindMap } from './components/MindMap';
 import { FloatingPopup } from './components/FloatingPopup';
 import { api } from './api';
-import type { Chat, ChatDetail, Message, WordPopup } from './types';
+import type { Chat, ChatDetail, LocalAttachment, Message, Settings, WordPopup } from './types';
 
 export default function App() {
   // chats: the full tree shown in the sidebar
@@ -30,6 +30,10 @@ export default function App() {
 
   const [viewMode, setViewMode] = useState<'chat' | 'mindmap'>('chat');
   const [loadingChat, setLoadingChat] = useState(false);
+
+  // Active LLM settings — surfaced in the sidebar footer so the user always
+  // knows which provider/model is being used (and whose API key is paying).
+  const [settings, setSettings] = useState<Settings | null>(null);
 
   // streaming: true while the AI is generating its response
   const [streaming, setStreaming] = useState(false);
@@ -47,6 +51,19 @@ export default function App() {
 
   // Load the sidebar tree on initial render.
   useEffect(() => { refreshTree(); }, [refreshTree]);
+
+  // Load current LLM settings on initial render so the sidebar footer can show
+  // them right away. Failures are non-fatal — the footer simply renders nothing.
+  useEffect(() => {
+    api.getSettings().then(setSettings).catch(() => {});
+  }, []);
+
+  // The mindmap toggle is hidden when no chat is active. If the user was in
+  // mindmap view and the active chat goes away (e.g. deleted), drop them back
+  // into chat view so they don't get stuck without the toggle.
+  useEffect(() => {
+    if (!activeChatId && viewMode === 'mindmap') setViewMode('chat');
+  }, [activeChatId, viewMode]);
 
   // Load a chat's messages and mark it as active in the sidebar.
   const handleSelectChat = async (id: string) => {
@@ -77,8 +94,17 @@ export default function App() {
     await refreshTree();
   };
 
+  // Rename a chat. Also patch the active chat so the header updates instantly.
+  const handleRenameChat = async (id: string, title: string) => {
+    await api.renameChat(id, title);
+    if (activeChatId === id && activeChat) {
+      setActiveChat({ ...activeChat, title });
+    }
+    await refreshTree();
+  };
+
   // Send a message with optimistic UI and real-time streaming.
-  const handleSendMessage = async (content: string) => {
+  const handleSendMessage = async (content: string, attachments: LocalAttachment[] = []) => {
     if (!activeChatId) return;
 
     // Create temporary IDs for the optimistic messages.
@@ -86,9 +112,19 @@ export default function App() {
     const tempAssistantId = `temp-assistant-${Date.now()}`;
     const now = new Date().toISOString();
 
+    // Optimistische Anhänge: nur die Felder, die das UI braucht, mit Object-URLs als Vorschau.
+    const optimisticAttachments = attachments.map((a, i) => ({
+      id: `temp-att-${Date.now()}-${i}`,
+      alias: a.alias,
+      filename: a.file.name,
+      mimetype: a.file.type,
+      size: a.file.size,
+      url: a.previewUrl || '',
+    }));
+
     // Immediately add the user's message and an empty assistant placeholder
     // so the UI feels instant and shows the streaming cursor right away.
-    const tempUser: Message = { id: tempUserId, chat_id: activeChatId, role: 'user', content, created_at: now };
+    const tempUser: Message = { id: tempUserId, chat_id: activeChatId, role: 'user', content, created_at: now, attachments: optimisticAttachments };
     const tempAssistant: Message = { id: tempAssistantId, chat_id: activeChatId, role: 'assistant', content: '', created_at: now };
 
     setActiveChat(prev => prev ? { ...prev, messages: [...prev.messages, tempUser, tempAssistant] } : prev);
@@ -109,7 +145,8 @@ export default function App() {
               ),
             };
           });
-        }
+        },
+        attachments,
       );
 
       // Replace the temporary messages with the real persisted ones from the server.
@@ -173,8 +210,11 @@ export default function App() {
         onSelect={handleSelectChat}
         onNewChat={handleNewChat}
         onDelete={handleDeleteChat}
+        onRename={handleRenameChat}
         viewMode={viewMode}
         onToggleView={() => setViewMode(v => v === 'chat' ? 'mindmap' : 'chat')}
+        settings={settings}
+        onSettingsChange={setSettings}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden">

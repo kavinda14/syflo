@@ -42,9 +42,7 @@ describe('FloatingPopup', () => {
   it('calls onClose when X button clicked', () => {
     const onClose = vi.fn();
     render(<FloatingPopup {...defaultProps} onClose={onClose} />);
-    // The X button is the first (and only) button in the header
-    const buttons = screen.getAllByRole('button');
-    fireEvent.click(buttons[0]);
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -53,5 +51,28 @@ describe('FloatingPopup', () => {
     render(<FloatingPopup {...defaultProps} onOpenChildChat={onOpenChildChat} />);
     fireEvent.click(screen.getByText(/Open as new chat/i));
     expect(onOpenChildChat).toHaveBeenCalledWith('quantum', 'Quantum physics is complex');
+  });
+
+  describe('copy button', () => {
+    it('writes the popup word to the clipboard when clicked', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+
+      render(<FloatingPopup {...defaultProps} />);
+      fireEvent.click(screen.getByRole('button', { name: /copy text/i }));
+
+      expect(writeText).toHaveBeenCalledWith('quantum');
+    });
+
+    it('switches the icon label to "Copied" after a successful copy', async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.assign(navigator, { clipboard: { writeText } });
+
+      render(<FloatingPopup {...defaultProps} />);
+      fireEvent.click(screen.getByRole('button', { name: /copy text/i }));
+
+      // Wait for the async clipboard write + state update to flush.
+      await screen.findByRole('button', { name: /copied/i });
+    });
   });
 });

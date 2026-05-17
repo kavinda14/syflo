@@ -35,8 +35,10 @@ describe('MindMap radial layout', () => {
     expect(xs.size).toBeGreaterThan(1);
 
     // All children should be at roughly the same distance from origin.
+    // (Exact value matches RADIUS_STEP — bumped when nodes grew in size.)
     const distances = positions.map(p => Math.hypot(p.x, p.y));
-    distances.forEach(d => expect(d).toBeCloseTo(260, 0));
+    const referenceRadius = distances[0];
+    distances.forEach(d => expect(d).toBeCloseTo(referenceRadius, 0));
   });
 
   it('keeps grandchildren on the outward side of their parent', () => {
@@ -53,6 +55,48 @@ describe('MindMap radial layout', () => {
     const habitsDist = Math.hypot(habitsPos.x, habitsPos.y);
     grandkidPositions.forEach(p => {
       expect(Math.hypot(p.x, p.y)).toBeGreaterThan(habitsDist);
+    });
+  });
+
+  it('passes preview, parentWord, and messageCount into each node\'s data', () => {
+    const child: Chat = {
+      id: 'child',
+      title: 'Child Chat',
+      parent_id: 'root',
+      parent_word: 'Sehnsucht',
+      created_at: '2025-01-01T00:00:00Z',
+      children: [],
+      preview: 'Was bedeutet Sehnsucht im Deutschen?',
+      message_count: 7,
+    };
+    const root: Chat = {
+      id: 'root',
+      title: 'Root',
+      parent_id: null,
+      parent_word: null,
+      created_at: '2025-01-01T00:00:00Z',
+      children: [child],
+      preview: 'Eine erste Frage',
+      message_count: 3,
+    };
+
+    const { nodes } = buildLayout([root]);
+    const rootNode = nodes.find(n => n.id === 'root')!;
+    const childNode = nodes.find(n => n.id === 'child')!;
+
+    expect(rootNode.type).toBe('chat');
+    expect(rootNode.data).toMatchObject({
+      title: 'Root',
+      preview: 'Eine erste Frage',
+      messageCount: 3,
+      isRoot: true,
+    });
+    expect(childNode.data).toMatchObject({
+      title: 'Child Chat',
+      parentWord: 'Sehnsucht',
+      preview: 'Was bedeutet Sehnsucht im Deutschen?',
+      messageCount: 7,
+      isRoot: false,
     });
   });
 
