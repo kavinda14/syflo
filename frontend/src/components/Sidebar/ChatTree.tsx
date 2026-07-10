@@ -24,10 +24,9 @@ interface Props {
   onContextMenu: (id: string, x: number, y: number) => void;
   onRenameSubmit: (id: string, title: string) => void;
   onRenameCancel: () => void;
-  depth?: number;
 }
 
-function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onRenameSubmit, onRenameCancel, depth = 0 }: {
+function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onRenameSubmit, onRenameCancel }: {
   chat: Chat;
   activeChatId: string | null;
   renamingId: string | null;
@@ -35,7 +34,6 @@ function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onR
   onContextMenu: (id: string, x: number, y: number) => void;
   onRenameSubmit: (id: string, title: string) => void;
   onRenameCancel: () => void;
-  depth: number;
 }) {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = chat.children && chat.children.length > 0;
@@ -51,7 +49,6 @@ function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onR
             ? 'bg-blue-50 text-blue-700'
             : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
         }`}
-        style={{ paddingLeft: `${10 + depth * 14}px` }}
         onClick={() => !isRenaming && onSelect(chat.id)}
         onContextMenu={e => {
           e.preventDefault();
@@ -83,22 +80,40 @@ function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onR
         )}
       </div>
 
-      {/* Recursively render child chats when expanded */}
+      {/* Recursively render child chats when expanded.
+          Connector lines (design/mockup-paper-view.html): each child row gets a
+          horizontal elbow back to a vertical trunk under the parent. The trunk
+          segment is anchored per child wrapper — full height for non-last
+          siblings (spans their subtree), stopping at the row middle for the
+          last sibling so no line dangles below it. */}
       {hasChildren && expanded && (
-        <div>
-          {chat.children!.map(child => (
-            <TreeNode
-              key={child.id}
-              chat={child}
-              activeChatId={activeChatId}
-              renamingId={renamingId}
-              onSelect={onSelect}
-              onContextMenu={onContextMenu}
-              onRenameSubmit={onRenameSubmit}
-              onRenameCancel={onRenameCancel}
-              depth={depth + 1}
-            />
-          ))}
+        <div className="relative pl-[22px]">
+          {chat.children!.map((child, i) => {
+            const isLast = i === chat.children!.length - 1;
+            return (
+              <div key={child.id} className="relative">
+                <span
+                  data-testid={isLast ? 'tree-trunk-end' : 'tree-trunk'}
+                  className="absolute w-px bg-slate-300 pointer-events-none"
+                  style={isLast ? { left: -8, top: -2, height: 18 } : { left: -8, top: -2, bottom: 0 }}
+                />
+                <span
+                  data-testid="tree-elbow"
+                  className="absolute h-px bg-slate-300 pointer-events-none"
+                  style={{ left: -8, top: 16, width: 14 }}
+                />
+                <TreeNode
+                  chat={child}
+                  activeChatId={activeChatId}
+                  renamingId={renamingId}
+                  onSelect={onSelect}
+                  onContextMenu={onContextMenu}
+                  onRenameSubmit={onRenameSubmit}
+                  onRenameCancel={onRenameCancel}
+                />
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -155,7 +170,6 @@ export function ChatTree({ chats, activeChatId, renamingId, onSelect, onContextM
           onContextMenu={onContextMenu}
           onRenameSubmit={onRenameSubmit}
           onRenameCancel={onRenameCancel}
-          depth={0}
         />
       ))}
     </div>

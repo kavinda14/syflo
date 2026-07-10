@@ -120,6 +120,52 @@ describe('ChatTree – interactions', () => {
   });
 });
 
+describe('ChatTree – connector lines', () => {
+  it('shows trunk and elbow lines for nested branches, none for root-level chats', () => {
+    render(<ChatTree chats={nestedChats} {...baseProps} />);
+    // the child row is connected to its parent by a trunk segment and an elbow
+    expect(screen.getAllByTestId(/tree-trunk/).length).toBeGreaterThan(0);
+    expect(screen.getAllByTestId('tree-elbow').length).toBe(1);
+  });
+
+  it('shows no connector lines when there are only root-level chats', () => {
+    render(<ChatTree chats={flatChats} {...baseProps} />);
+    expect(screen.queryByTestId(/tree-trunk/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tree-elbow')).not.toBeInTheDocument();
+  });
+
+  it('ends the trunk at the last sibling — no dangling line below it', () => {
+    const threeChildren: Chat[] = [
+      {
+        id: '1', title: 'Parent', parent_id: null, parent_word: null, created_at: '',
+        children: [
+          { id: '2', title: 'First', parent_id: '1', parent_word: null, created_at: '', children: [] },
+          { id: '3', title: 'Middle', parent_id: '1', parent_word: null, created_at: '', children: [] },
+          { id: '4', title: 'Last', parent_id: '1', parent_word: null, created_at: '', children: [] },
+        ],
+      },
+    ];
+    render(<ChatTree chats={threeChildren} {...baseProps} />);
+    // non-last siblings carry a continuing trunk; only the last sibling gets the
+    // terminating segment that stops at its row
+    expect(screen.getAllByTestId('tree-trunk').length).toBe(2);
+    expect(screen.getAllByTestId('tree-trunk-end').length).toBe(1);
+    const end = screen.getByTestId('tree-trunk-end');
+    expect(end.style.bottom).toBe('');
+    expect(end.style.height).not.toBe('');
+  });
+
+  it('hides the children’s connector lines when the parent is collapsed', () => {
+    render(<ChatTree chats={nestedChats} {...baseProps} />);
+    const chevron = screen.getAllByRole('button').find(btn =>
+      btn.closest('div')?.textContent?.includes('Parent Chat')
+    );
+    fireEvent.click(chevron!);
+    expect(screen.queryByTestId(/tree-trunk/)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('tree-elbow')).not.toBeInTheDocument();
+  });
+});
+
 describe('ChatTree – expand / collapse', () => {
   it('shows child chats by default (expanded)', () => {
     render(<ChatTree chats={nestedChats} {...baseProps} />);
