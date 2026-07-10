@@ -84,3 +84,6 @@ The app ships as a Tauri desktop shell (`src-tauri/`).
 - Tests run after every feature before it is called done.
 - UI copy is English; icons are Lucide, never emojis.
 - UI changes are diffed against the relevant `design/mockup-*.html` before and after.
+  For 1:1 ports the copied Syflo mockups in `design/` are the source of truth; newly
+  composed surfaces (three-column PDF layout, paperclip menu, search dialog) get a
+  fresh mockup approved *before* implementation.

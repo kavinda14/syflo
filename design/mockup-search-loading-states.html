@@ -1,0 +1,677 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Search Loading States · Syflo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --brand-blue: #3B82F6;
+    --brand-teal: #1FB6A6;
+    --brand-green: #34D399;
+    --bg-app: #F8FAFC;
+    --surface: #FFFFFF;
+    --text-strong: #0F172A;
+    --text-default: #334155;
+    --text-muted: #64748B;
+    --border: #E2E8F0;
+    --shadow: 0 1px 3px rgba(15,23,42,0.06), 0 1px 2px rgba(15,23,42,0.04);
+    --shadow-lg: 0 10px 30px rgba(15,23,42,0.08), 0 4px 10px rgba(15,23,42,0.04);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--bg-app); color: var(--text-default);
+    -webkit-font-smoothing: antialiased; font-feature-settings: "cv11";
+    min-height: 100vh;
+  }
+
+  /* ===== Sticky header ===== */
+  .topbar {
+    height: 64px; background: var(--surface); border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 32px; position: sticky; top: 0; z-index: 50;
+    backdrop-filter: blur(8px);
+  }
+  .topbar .title {
+    font-size: 15px; font-weight: 600; color: var(--text-strong); letter-spacing: -0.01em;
+  }
+  .topbar .title .muted { color: var(--text-muted); font-weight: 500; }
+  .topbar .meta {
+    font-size: 12.5px; color: var(--text-muted);
+  }
+
+  /* ===== Backdrop ===== */
+  .backdrop {
+    position: fixed; inset: 0; pointer-events: none; z-index: -1;
+    background:
+      radial-gradient(circle at 20% 0%, rgba(59,130,246,0.05), transparent 50%),
+      radial-gradient(circle at 80% 0%, rgba(52,211,153,0.04), transparent 50%);
+  }
+
+  /* ===== Grid ===== */
+  main {
+    max-width: 1600px; margin: 0 auto; padding: 56px 48px 96px;
+  }
+  .intro {
+    text-align: center; margin-bottom: 56px;
+  }
+  .intro h1 {
+    font-size: 32px; font-weight: 700; color: var(--text-strong);
+    letter-spacing: -0.02em; margin-bottom: 10px;
+  }
+  .intro p {
+    font-size: 15px; color: var(--text-muted); max-width: 620px; margin: 0 auto; line-height: 1.55;
+  }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 48px;
+  }
+  @media (min-width: 1280px) {
+    .grid { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  .cell {
+    display: flex; flex-direction: column; gap: 14px;
+    min-width: 0;
+  }
+  .cell-label {
+    font-size: 12px; font-weight: 600; color: var(--text-muted);
+    letter-spacing: 0.04em; text-transform: uppercase;
+    display: flex; align-items: baseline; gap: 8px;
+  }
+  .cell-label .num {
+    color: var(--brand-blue); font-weight: 700;
+  }
+  .cell-label .name {
+    color: var(--text-strong); text-transform: none; letter-spacing: -0.005em; font-weight: 600; font-size: 13.5px;
+  }
+  .cell-desc {
+    font-size: 12.5px; color: var(--text-muted); line-height: 1.5;
+    padding: 0 2px;
+  }
+  .stage {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px 24px;
+    display: flex; flex-direction: column; align-items: center;
+    min-height: 180px;
+    justify-content: center;
+    position: relative;
+    overflow: hidden;
+  }
+
+  /* ===== Base search bar (shared) ===== */
+  .search {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+    box-shadow: var(--shadow); display: flex; align-items: center;
+    padding: 6px; width: 100%; max-width: 500px;
+    position: relative;
+  }
+  .search-icon {
+    width: 44px; height: 44px; display: flex; align-items: center; justify-content: center;
+    color: var(--text-muted); flex-shrink: 0;
+  }
+  .search input {
+    flex: 1; border: none; outline: none; font: inherit; font-size: 15px;
+    color: var(--text-strong); padding: 12px 6px; background: transparent;
+    min-width: 0;
+  }
+  .search input::placeholder { color: var(--text-muted); }
+  .search-cta {
+    background: var(--brand-blue); color: white; border: none; border-radius: 13px;
+    padding: 11px 18px; font: inherit; font-weight: 600; font-size: 14px; cursor: pointer;
+    transition: all 150ms ease; flex-shrink: 0;
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    min-width: 92px;
+  }
+
+  /* ===== Animations (shared) ===== */
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes shimmer {
+    0% { background-position: -400px 0; }
+    100% { background-position: 400px 0; }
+  }
+  @keyframes pulse-dot {
+    0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+    40% { transform: scale(1); opacity: 1; }
+  }
+  @keyframes indeterminate {
+    0% { left: -40%; width: 40%; }
+    50% { width: 50%; }
+    100% { left: 100%; width: 40%; }
+  }
+  @keyframes border-rotate {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+  }
+  @keyframes glow {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(59,130,246,0.0), var(--shadow); }
+    50% { box-shadow: 0 0 0 6px rgba(59,130,246,0.10), 0 10px 28px rgba(59,130,246,0.16); }
+  }
+  @keyframes bg-shift {
+    0% { background-position: 0% 0%; }
+    100% { background-position: 200% 0%; }
+  }
+
+  /* ===== Helpers ===== */
+  .spinner {
+    width: 18px; height: 18px;
+    border: 2px solid rgba(59,130,246,0.18);
+    border-top-color: var(--brand-blue);
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    display: inline-block;
+  }
+  .spinner.sm {
+    width: 14px; height: 14px; border-width: 1.8px;
+  }
+  .spinner.on-blue {
+    border-color: rgba(255,255,255,0.35);
+    border-top-color: white;
+  }
+  .spinner.muted {
+    border-color: rgba(100,116,139,0.2);
+    border-top-color: var(--text-muted);
+  }
+  .muted-text {
+    font-size: 13px; color: var(--text-muted); font-weight: 500;
+  }
+  .check-svg {
+    color: var(--brand-green);
+    width: 13px; height: 13px;
+    flex-shrink: 0;
+  }
+
+  /* ===== L1 — Skeleton rows below bar ===== */
+  .l1-wrap { width: 100%; max-width: 500px; display: flex; flex-direction: column; gap: 10px; }
+  .skeleton-row {
+    height: 14px; border-radius: 6px;
+    background: linear-gradient(
+      90deg,
+      #EEF2F7 0%,
+      #E2E8F0 50%,
+      #EEF2F7 100%
+    );
+    background-size: 800px 100%;
+    animation: shimmer 1.8s ease-in-out infinite;
+  }
+  .skeleton-row.r1 { width: 92%; }
+  .skeleton-row.r2 { width: 78%; }
+  .skeleton-row.r3 { width: 64%; }
+
+  /* ===== L2 — Inline spinner left ===== */
+  .l2-icon { color: var(--brand-blue); }
+
+  /* ===== L3 — Pulsating gradient border ===== */
+  .l3-shell {
+    padding: 2px; border-radius: 20px;
+    background: linear-gradient(
+      120deg,
+      var(--brand-blue),
+      var(--brand-teal),
+      var(--brand-green),
+      var(--brand-teal),
+      var(--brand-blue)
+    );
+    background-size: 300% 100%;
+    animation: bg-shift 3s linear infinite;
+    width: 100%; max-width: 500px;
+  }
+  .l3-shell .search {
+    margin: 0; max-width: 100%;
+    border-color: transparent;
+  }
+
+  /* ===== L4 — Quiet text right ===== */
+  .l4-status {
+    font-size: 13px; color: var(--text-muted); padding-right: 14px;
+    font-weight: 500; white-space: nowrap;
+  }
+
+  /* ===== L5 — Thin indeterminate progress line bottom ===== */
+  .l5-wrap {
+    width: 100%; max-width: 500px; position: relative;
+  }
+  .l5-progress {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 2px; overflow: hidden; border-radius: 0 0 18px 18px;
+    pointer-events: none;
+  }
+  .l5-progress::after {
+    content: ""; position: absolute; top: 0; bottom: 0;
+    background: linear-gradient(90deg, var(--brand-blue), var(--brand-teal));
+    border-radius: 2px;
+    animation: indeterminate 1.6s ease-in-out infinite;
+  }
+
+  /* ===== L6 — Three pulsing dots right ===== */
+  .l6-dots {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding-right: 14px;
+  }
+  .l6-dots span {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--brand-blue);
+    animation: pulse-dot 1.4s ease-in-out infinite both;
+  }
+  .l6-dots span:nth-child(1) { animation-delay: -0.32s; }
+  .l6-dots span:nth-child(2) { animation-delay: -0.16s; }
+  .l6-dots span:nth-child(3) { animation-delay: 0s; }
+
+  /* ===== L7 — Dropdown with skeleton result cards ===== */
+  .l7-wrap { width: 100%; max-width: 500px; display: flex; flex-direction: column; gap: 0; }
+  .l7-wrap .search { border-radius: 18px 18px 0 0; border-bottom-color: transparent; }
+  .l7-dropdown {
+    background: var(--surface);
+    border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 18px 18px;
+    box-shadow: var(--shadow-lg);
+    padding: 10px 12px; display: flex; flex-direction: column; gap: 10px;
+  }
+  .l7-row {
+    display: flex; flex-direction: column; gap: 7px;
+    padding: 10px 6px;
+    border-bottom: 1px solid var(--border);
+  }
+  .l7-row:last-child { border-bottom: none; }
+  .l7-row .sk-title {
+    height: 12px; border-radius: 5px; width: 88%;
+    background: linear-gradient(90deg, #EEF2F7 0%, #E2E8F0 50%, #EEF2F7 100%);
+    background-size: 800px 100%;
+    animation: shimmer 1.8s ease-in-out infinite;
+  }
+  .l7-row .sk-meta {
+    height: 9px; border-radius: 4px; width: 52%;
+    background: linear-gradient(90deg, #F1F5F9 0%, #E2E8F0 50%, #F1F5F9 100%);
+    background-size: 800px 100%;
+    animation: shimmer 1.8s ease-in-out infinite;
+    animation-delay: 0.2s;
+  }
+  .l7-row:nth-child(2) .sk-title { width: 76%; animation-delay: 0.15s; }
+  .l7-row:nth-child(3) .sk-title { width: 84%; animation-delay: 0.3s; }
+  .l7-row:nth-child(3) .sk-meta { width: 44%; }
+
+  /* ===== L8 — Dropdown with shifting gradient bg ===== */
+  .l8-wrap { width: 100%; max-width: 500px; display: flex; flex-direction: column; gap: 0; }
+  .l8-wrap .search { border-radius: 18px 18px 0 0; border-bottom-color: transparent; }
+  .l8-dropdown {
+    border: 1px solid var(--border); border-top: none;
+    border-radius: 0 0 18px 18px;
+    padding: 18px 18px;
+    display: flex; align-items: center; gap: 10px;
+    background: linear-gradient(
+      120deg,
+      rgba(59,130,246,0.08) 0%,
+      rgba(31,182,166,0.10) 25%,
+      rgba(52,211,153,0.08) 50%,
+      rgba(31,182,166,0.10) 75%,
+      rgba(59,130,246,0.08) 100%
+    );
+    background-size: 200% 100%;
+    animation: bg-shift 3.5s linear infinite;
+    color: var(--text-default); font-size: 13.5px; font-weight: 500;
+  }
+
+  /* ===== L9 — Search button becomes spinner ===== */
+  /* uses .spinner.on-blue inside .search-cta */
+
+  /* ===== L10 — Subtle box-shadow glow on bar ===== */
+  .l10-search {
+    animation: glow 2s ease-in-out infinite;
+    border-color: rgba(59,130,246,0.35);
+  }
+
+  /* ===== L11 — Quiet info text + small spinner ===== */
+  .l11-status {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding-right: 14px; font-size: 13px; color: var(--text-muted); font-weight: 500;
+    white-space: nowrap;
+  }
+
+  /* ===== L12 — Source indicator ===== */
+  .l12-wrap { width: 100%; max-width: 500px; display: flex; flex-direction: column; gap: 10px; }
+  .l12-sources {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px;
+    padding: 0 10px;
+    font-size: 12.5px; color: var(--text-muted); font-weight: 500;
+  }
+  .l12-source {
+    display: inline-flex; align-items: center; gap: 5px;
+  }
+  .l12-source.done {
+    color: var(--text-default);
+  }
+  .l12-source.pending {
+    color: var(--text-muted);
+  }
+  .l12-source.pending::after {
+    content: "…";
+  }
+  .l12-sep { color: #CBD5E1; }
+</style>
+</head>
+<body>
+<div class="backdrop"></div>
+
+<!-- Shared SVG defs -->
+<svg width="0" height="0" style="position: absolute;" aria-hidden="true">
+  <defs>
+    <linearGradient id="brand-grad" x1="0" x2="1">
+      <stop offset="0%" stop-color="#3B82F6"/>
+      <stop offset="50%" stop-color="#1FB6A6"/>
+      <stop offset="100%" stop-color="#34D399"/>
+    </linearGradient>
+  </defs>
+</svg>
+
+<!-- ===== Sticky header ===== -->
+<header class="topbar">
+  <div class="title">Search Loading States <span class="muted">· Syflo</span></div>
+  <div class="meta">12 variants · side-by-side comparison</div>
+</header>
+
+<main>
+
+  <div class="intro">
+    <h1>Loading state explorations</h1>
+    <p>Twelve takes on the in-flight search state. Each preview shows the same query
+       (<em>“Attention is all you need”</em>) so animations, copy and visual weight can be
+       compared at a glance.</p>
+  </div>
+
+  <div class="grid">
+
+    <!-- =================================================== -->
+    <!-- L1 — Skeleton rows below the bar -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L1</span><span class="name">Skeleton rows</span></div>
+      <div class="stage">
+        <div class="l1-wrap">
+          <div class="search">
+            <div class="search-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </div>
+            <input value="Attention is all you need" readonly>
+            <button class="search-cta">Search</button>
+          </div>
+          <div class="skeleton-row r1"></div>
+          <div class="skeleton-row r2"></div>
+          <div class="skeleton-row r3"></div>
+        </div>
+      </div>
+      <div class="cell-desc">Three shimmer bars hint at incoming result rows without committing to a count.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L2 — Inline spinner replaces the search icon -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L2</span><span class="name">Inline spinner</span></div>
+      <div class="stage">
+        <div class="search">
+          <div class="search-icon l2-icon">
+            <span class="spinner"></span>
+          </div>
+          <input value="Attention is all you need" readonly>
+          <button class="search-cta">Search</button>
+        </div>
+      </div>
+      <div class="cell-desc">The search glass swaps out for a spinner — minimal, focused, no extra chrome.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L3 — Pulsating gradient border around the bar -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L3</span><span class="name">Gradient border</span></div>
+      <div class="stage">
+        <div class="l3-shell">
+          <div class="search">
+            <div class="search-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </div>
+            <input value="Attention is all you need" readonly>
+            <button class="search-cta">Search</button>
+          </div>
+        </div>
+      </div>
+      <div class="cell-desc">The bar itself glows — Syflo brand gradient flows around its frame.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L4 — Quiet text right -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L4</span><span class="name">Quiet status text</span></div>
+      <div class="stage">
+        <div class="search">
+          <div class="search-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </div>
+          <input value="Attention is all you need" readonly>
+          <span class="l4-status">Searching arXiv and OpenAlex…</span>
+          <button class="search-cta">Search</button>
+        </div>
+      </div>
+      <div class="cell-desc">No animation, only words. Tells the user exactly which sources are being checked.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L5 — Thin indeterminate progress bar at bottom edge -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L5</span><span class="name">Progress line</span></div>
+      <div class="stage">
+        <div class="l5-wrap">
+          <div class="search">
+            <div class="search-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </div>
+            <input value="Attention is all you need" readonly>
+            <button class="search-cta">Search</button>
+          </div>
+          <div class="l5-progress"></div>
+        </div>
+      </div>
+      <div class="cell-desc">A 2 px indeterminate bar sweeps along the bottom edge — borrowed from YouTube and Material.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L6 — Three pulsing dots right -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L6</span><span class="name">Typing dots</span></div>
+      <div class="stage">
+        <div class="search">
+          <div class="search-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </div>
+          <input value="Attention is all you need" readonly>
+          <span class="l6-dots"><span></span><span></span><span></span></span>
+          <button class="search-cta">Search</button>
+        </div>
+      </div>
+      <div class="cell-desc">Three pulsing brand dots — chat-style typing indicator that says “something’s happening.”</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L7 — Dropdown with skeleton result cards -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L7</span><span class="name">Dropdown skeletons</span></div>
+      <div class="stage">
+        <div class="l7-wrap">
+          <div class="search">
+            <div class="search-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </div>
+            <input value="Attention is all you need" readonly>
+            <button class="search-cta">Search</button>
+          </div>
+          <div class="l7-dropdown">
+            <div class="l7-row"><div class="sk-title"></div><div class="sk-meta"></div></div>
+            <div class="l7-row"><div class="sk-title"></div><div class="sk-meta"></div></div>
+            <div class="l7-row"><div class="sk-title"></div><div class="sk-meta"></div></div>
+          </div>
+        </div>
+      </div>
+      <div class="cell-desc">A real result dropdown opens with shimmer placeholders that match the final card shape.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L8 — Dropdown with shifting gradient bg -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L8</span><span class="name">Gradient panel</span></div>
+      <div class="stage">
+        <div class="l8-wrap">
+          <div class="search">
+            <div class="search-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </div>
+            <input value="Attention is all you need" readonly>
+            <button class="search-cta">Search</button>
+          </div>
+          <div class="l8-dropdown">
+            <span class="spinner sm muted"></span>
+            <span>Searching…</span>
+          </div>
+        </div>
+      </div>
+      <div class="cell-desc">A drawer drops down with a slowly drifting brand-gradient wash and a quiet spinner.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L9 — Button becomes spinner -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L9</span><span class="name">Button spinner</span></div>
+      <div class="stage">
+        <div class="search">
+          <div class="search-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </div>
+          <input value="Attention is all you need" readonly>
+          <button class="search-cta" aria-label="Searching">
+            <span class="spinner sm on-blue"></span>
+          </button>
+        </div>
+      </div>
+      <div class="cell-desc">The blue Search button keeps its shape — text swaps out for a white spinner.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L10 — Subtle box-shadow glow pulsation -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L10</span><span class="name">Glow pulse</span></div>
+      <div class="stage">
+        <div class="search l10-search">
+          <div class="search-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </div>
+          <input value="Attention is all you need" readonly>
+          <button class="search-cta">Search</button>
+        </div>
+      </div>
+      <div class="cell-desc">The whole bar breathes — a soft blue halo expands and fades every two seconds.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L11 — Informative text + small spinner -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L11</span><span class="name">Informative status</span></div>
+      <div class="stage">
+        <div class="search">
+          <div class="search-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+            </svg>
+          </div>
+          <input value="Attention is all you need" readonly>
+          <span class="l11-status">
+            <span class="spinner sm muted"></span>
+            Searching 200M+ papers via OpenAlex…
+          </span>
+          <button class="search-cta">Search</button>
+        </div>
+      </div>
+      <div class="cell-desc">A small spinner plus an honest sentence: scale + source make the wait feel justified.</div>
+    </div>
+
+    <!-- =================================================== -->
+    <!-- L12 — Per-source indicator -->
+    <!-- =================================================== -->
+    <div class="cell">
+      <div class="cell-label"><span class="num">L12</span><span class="name">Per-source progress</span></div>
+      <div class="stage">
+        <div class="l12-wrap">
+          <div class="search">
+            <div class="search-icon">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+            </div>
+            <input value="Attention is all you need" readonly>
+            <button class="search-cta">Search</button>
+          </div>
+          <div class="l12-sources">
+            <span class="l12-source done">
+              <svg class="check-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              arXiv
+            </span>
+            <span class="l12-sep">·</span>
+            <span class="l12-source done">
+              <svg class="check-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="20 6 9 17 4 12"/>
+              </svg>
+              Semantic Scholar
+            </span>
+            <span class="l12-sep">·</span>
+            <span class="l12-source pending">
+              <span class="spinner sm muted" style="width:11px;height:11px;border-width:1.5px;"></span>
+              OpenAlex
+            </span>
+          </div>
+        </div>
+      </div>
+      <div class="cell-desc">Per-backend status: green checks for what’s back, spinner for what’s still in flight.</div>
+    </div>
+
+  </div>
+
+</main>
+
+</body>
+</html>
