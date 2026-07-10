@@ -29,6 +29,19 @@ export interface LocalAttachment {
   previewUrl?: string; // object URL für Bilder-Vorschau
 }
 
+export interface SearchSource {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+export interface ToolEvent {
+  phase: 'call' | 'result';
+  name: string;
+  args?: { query?: string };
+  result?: { query?: string; results?: SearchSource[]; error?: string } | null;
+}
+
 export interface Message {
   id: string;
   chat_id: string;
@@ -36,6 +49,10 @@ export interface Message {
   content: string;
   created_at: string;
   attachments?: Attachment[];
+  // Transient (not persisted): sources surfaced from a web_search tool call
+  // during the streaming session this message was produced in. Populated by
+  // the streaming client; lost on page reload.
+  sources?: SearchSource[];
 }
 
 export interface ChatDetail extends Chat {

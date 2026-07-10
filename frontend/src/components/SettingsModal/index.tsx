@@ -28,9 +28,15 @@ interface Props {
   onSaved?: (s: Settings) => void;
 }
 
+// OpenAI models exposed in the settings dropdown.
+// "search-preview" variants have OpenAI's own built-in web search — for those,
+// the backend skips its own SearXNG tool-call wiring (see backend/tools.js).
+// All four can handle images.
 const OPENAI_MODELS = [
   { id: 'gpt-4o-mini', label: 'gpt-4o-mini — small, fast, cheap' },
   { id: 'gpt-4o', label: 'gpt-4o — multimodal, more powerful' },
+  { id: 'gpt-4o-mini-search-preview', label: 'gpt-4o-mini-search — built-in web search (no SearXNG)' },
+  { id: 'gpt-4o-search-preview', label: 'gpt-4o-search — built-in web search, best quality' },
 ];
 
 export function SettingsModal({ open, onClose, onSaved }: Props) {

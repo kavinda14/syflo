@@ -10,7 +10,7 @@
  * chunk so the UI can update in real time — exactly like ChatGPT's typing effect.
  */
 
-import type { Chat, ChatDetail, LocalAttachment, Message, Settings, SettingsUpdate } from '../types';
+import type { Chat, ChatDetail, LocalAttachment, Message, Settings, SettingsUpdate, ToolEvent } from '../types';
 
 const BASE = '/api';
 
@@ -50,6 +50,10 @@ export const api = {
     content: string,
     onDelta: (delta: string) => void,
     attachments: LocalAttachment[] = [],
+    // Called whenever the model invokes a tool (e.g. web_search) during the
+    // streaming response. The UI uses this to show "Searching the web for X…"
+    // and then a sources list once results come back.
+    onToolEvent?: (evt: ToolEvent) => void,
   ): Promise<{ userMessage: Message; assistantMessage: Message }> {
     let res: Response;
     if (attachments.length > 0) {
@@ -97,6 +101,10 @@ export const api = {
         // A text delta — pass it to the callback so the UI can append it.
         if (data.delta) onDelta(data.delta);
 
+        // A tool event — the model called a tool (e.g. web_search). The UI
+        // uses this for the "Searching…" indicator and the sources list.
+        if (data.tool && onToolEvent) onToolEvent(data.tool as ToolEvent);
+
         // The final event — streaming is complete, return the persisted messages.
         if (data.done) return { userMessage: data.userMessage, assistantMessage: data.assistantMessage };
       }
@@ -118,7 +126,11 @@ export const api = {
 
   // Deletes a chat and all its children (handled recursively on the backend).
   async deleteChat(id: string): Promise<void> {
-    await fetch(`${BASE}/chats/${id}`, { method: 'DELETE' });
+    const res = await fetch(`${BASE}/chats/${id}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || `Failed to delete chat (HTTP ${res.status})`);
+    }
   },
 
   // Renames a chat (updates only its title).

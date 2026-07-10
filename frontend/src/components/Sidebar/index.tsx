@@ -43,7 +43,9 @@ interface Props {
   activeChatId: string | null;
   onSelect: (id: string) => void;
   onNewChat: () => void;
-  onDelete: (id: string) => void;
+  // May be async — returns a Promise so the sidebar can await it and surface
+  // any failure (e.g. backend unreachable) in the confirmation modal.
+  onDelete: (id: string) => void | Promise<void>;
   onRename: (id: string, title: string) => void;
   viewMode: 'chat' | 'mindmap';
   onToggleView: () => void;
@@ -63,17 +65,15 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
   const expandedRoot = expandedRootId ? chats.find(c => c.id === expandedRootId) ?? null : null;
   const pendingDeleteChat = pendingDeleteId ? findChatById(chats, pendingDeleteId) : null;
 
-  // Close the context menu on any outside click or Escape press.
+  // Close the context menu on Escape. Outside clicks are handled by the
+  // backdrop element rendered below the menu — that's more reliable than a
+  // window listener, which can race with the buttons' own onClick handlers
+  // (React stopPropagation doesn't always stop native DOM bubbling).
   useEffect(() => {
     if (!contextMenu) return;
-    const close = () => setContextMenu(null);
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
-    window.addEventListener('click', close);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setContextMenu(null); };
     window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('click', close);
-      window.removeEventListener('keydown', onKey);
-    };
+    return () => window.removeEventListener('keydown', onKey);
   }, [contextMenu]);
 
   const handleRootClick = (id: string) => {
@@ -86,9 +86,24 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
 
   const requestDelete = (id: string) => setPendingDeleteId(id);
 
-  const confirmDelete = () => {
-    if (pendingDeleteId) onDelete(pendingDeleteId);
-    setPendingDeleteId(null);
+  // Await onDelete (which hits the backend) before closing the modal — that
+  // way, if the backend call fails, the parent can surface the error and the
+  // modal stays open so the user can retry. Closing optimistically used to
+  // hide silent fetch failures (e.g. when the dev server was down).
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const confirmDelete = async () => {
+    if (!pendingDeleteId) return;
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await onDelete(pendingDeleteId);
+      setPendingDeleteId(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : 'Could not delete the chat. Is the backend running?');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const handleRenameSubmit = (id: string, title: string) => {
@@ -135,13 +150,21 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
         onSaved={onSettingsChange}
       />
 
-      {/* Right-click context menu (rename / delete). Positioned at cursor. */}
+      {/* Right-click context menu (rename / delete). Positioned at cursor.
+          An invisible full-screen backdrop sits at z-40 to capture outside
+          clicks reliably — the menu itself is at z-50, so its button clicks
+          can never hit the backdrop and never race with a window listener. */}
       {contextMenu && (
-        <div
-          className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px]"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
-          onClick={e => e.stopPropagation()}
-        >
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setContextMenu(null)}
+            onContextMenu={e => { e.preventDefault(); setContextMenu(null); }}
+          />
+          <div
+            className="fixed z-50 bg-white border border-gray-200 rounded-lg shadow-lg py-1 min-w-[140px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
           <button
             onClick={() => { setRenamingId(contextMenu.chatId); setContextMenu(null); }}
             className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
@@ -156,14 +179,15 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
             <Trash2 size={13} />
             Delete
           </button>
-        </div>
+          </div>
+        </>
       )}
 
       {/* Delete-confirmation modal */}
       {pendingDeleteChat && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setPendingDeleteId(null)}
+          onClick={() => { if (!deleting) { setPendingDeleteId(null); setDeleteError(null); } }}
         >
           <div
             className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden"
@@ -174,19 +198,26 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
               <p className="text-sm text-gray-500 leading-relaxed">
                 "{pendingDeleteChat.title}" and all its branched chats will be permanently removed.
               </p>
+              {deleteError && (
+                <p className="mt-3 text-sm text-red-600 bg-red-50 px-3 py-2 rounded-md border border-red-100">
+                  {deleteError}
+                </p>
+              )}
             </div>
             <div className="flex gap-2 px-6 pb-5 pt-4 justify-end">
               <button
-                onClick={() => setPendingDeleteId(null)}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors"
+                onClick={() => { setPendingDeleteId(null); setDeleteError(null); }}
+                disabled={deleting}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-100 transition-colors disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmDelete}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-red-600 hover:bg-red-700 transition-colors"
+                disabled={deleting}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-red-600 hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                Delete
+                {deleting ? 'Deleting…' : deleteError ? 'Retry' : 'Delete'}
               </button>
             </div>
           </div>

@@ -5,7 +5,11 @@ const path = require('path');
 const fs = require('fs');
 const { createDb } = require('./database');
 
-const UPLOADS_DIR = path.join(__dirname, '..', 'uploads');
+// Same FLOWTALK_DATA_DIR convention as database.js: in the Tauri bundle this
+// points to a writable per-user location; in dev (no env var) we fall back to
+// the project's uploads/ folder so existing data keeps working.
+const DATA_DIR = process.env.FLOWTALK_DATA_DIR || path.join(__dirname, '..');
+const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
 function createApp(db) {
@@ -21,6 +25,7 @@ function createApp(db) {
   app.use('/api/chats/:chatId/messages', require('./routes/messages')(db, UPLOADS_DIR));
   app.use('/api/explain', require('./routes/explain')(db));
   app.use('/api/settings', require('./routes/settings')(db));
+  app.use('/api/search', require('./routes/search')());
 
   app.use((err, req, res, next) => {
     console.error('Error:', err.message);

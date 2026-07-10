@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>FlowTalk – ThinkingIndicator Preview</title>
+<style>
+  body {
+    margin: 0;
+    padding: 40px;
+    background: #0f1115;
+    color: #cbd5e1;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  h1 { color: #e2e8f0; font-weight: 600; font-size: 18px; margin: 0 0 24px; }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 20px;
+    border: 1px solid #1f2937;
+    border-radius: 10px;
+    background: #151820;
+    margin-bottom: 12px;
+  }
+  .label {
+    min-width: 220px;
+    color: #94a3b8;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .frame {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: #0b0d12;
+    border-radius: 6px;
+    /* leichter Hintergrund-Rahmen, um die Bounding-Box sichtbar zu machen */
+    outline: 1px dashed #334155;
+  }
+  .caption { color: #64748b; font-size: 12px; }
+
+  @keyframes ft-thinking-draw-new {
+    0%   { stroke-dashoffset: 30; }
+    50%  { stroke-dashoffset: 0; }
+    100% { stroke-dashoffset: -30; }
+  }
+  .wave-new {
+    fill: none;
+    stroke: url(#g-new);
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-dasharray: 30;
+    animation: ft-thinking-draw-new 1.8s ease-in-out infinite;
+  }
+  .wave-new--bot { animation-delay: 0.3s; }
+
+  @keyframes ft-thinking-draw-old {
+    0%   { stroke-dashoffset: 70; }
+    50%  { stroke-dashoffset: 0; }
+    100% { stroke-dashoffset: -70; }
+  }
+  .wave-old {
+    fill: none;
+    stroke: url(#g-old);
+    stroke-width: 2.5;
+    stroke-linecap: round;
+    stroke-dasharray: 70;
+    animation: ft-thinking-draw-old 1.8s ease-in-out infinite;
+  }
+  .wave-old--bot { animation-delay: 0.3s; }
+</style>
+</head>
+<body>
+  <h1>FlowTalk · ThinkingIndicator – Proportionen-Vergleich</h1>
+
+  <!-- Favicon (Referenz) -->
+  <div class="row">
+    <div class="label">Favicon (Referenz)</div>
+    <div class="frame" style="width:32px;height:32px">
+      <svg width="32" height="32" viewBox="0 0 32 32">
+        <defs>
+          <linearGradient id="g-fav" x1="0" x2="1">
+            <stop offset="0%"   stop-color="#3B82F6"/>
+            <stop offset="50%"  stop-color="#1FB6A6"/>
+            <stop offset="100%" stop-color="#34D399"/>
+          </linearGradient>
+        </defs>
+        <rect width="32" height="32" rx="7" fill="url(#g-fav)"/>
+        <path d="M 5 11 Q 11 7, 16 11 T 27 11" stroke="white" stroke-width="2" stroke-linecap="round" fill="none"/>
+        <path d="M 5 21 Q 11 25, 16 21 T 27 21" stroke="white" stroke-width="2" stroke-linecap="round" fill="none"/>
+      </svg>
+    </div>
+    <div class="caption">32×32, viewBox 32×32 (1:1, quadratisch)</div>
+  </div>
+
+  <!-- NEUE Animation -->
+  <div class="row">
+    <div class="label">Neue Animation</div>
+    <div class="frame" style="width:24px;height:24px">
+      <svg width="24" height="24" viewBox="0 0 32 32" style="overflow:visible">
+        <defs>
+          <linearGradient id="g-new" x1="0" x2="1">
+            <stop offset="0%"   stop-color="#3B82F6"/>
+            <stop offset="50%"  stop-color="#1FB6A6"/>
+            <stop offset="100%" stop-color="#34D399"/>
+          </linearGradient>
+        </defs>
+        <path class="wave-new" d="M 5 11 Q 11 7, 16 11 T 27 11"/>
+        <path class="wave-new wave-new--bot" d="M 5 21 Q 11 25, 16 21 T 27 21"/>
+      </svg>
+    </div>
+    <div class="caption">24×24, viewBox 32×32, gleiche Pfade wie Favicon (1:1)</div>
+  </div>
+
+  <!-- ALTE Animation -->
+  <div class="row">
+    <div class="label">Alte Animation (zum Vergleich)</div>
+    <div class="frame" style="width:44px;height:22px">
+      <svg width="44" height="22" viewBox="0 0 60 28" style="overflow:visible">
+        <defs>
+          <linearGradient id="g-old" x1="0" x2="1">
+            <stop offset="0%"   stop-color="#3B82F6"/>
+            <stop offset="50%"  stop-color="#1FB6A6"/>
+            <stop offset="100%" stop-color="#34D399"/>
+          </linearGradient>
+        </defs>
+        <path class="wave-old" d="M 4 10 Q 15 4, 26 10 T 56 10"/>
+        <path class="wave-old wave-old--bot" d="M 4 20 Q 15 26, 26 20 T 56 20"/>
+      </svg>
+    </div>
+    <div class="caption">44×22 (~2:1, zu breit)</div>
+  </div>
+
+  <!-- Im Kontext: Animation + Text -->
+  <div class="row">
+    <div class="label">Im Chat-Kontext (neu)</div>
+    <div style="display:flex;align-items:center;gap:10px;color:#94a3b8;font-style:italic;font-size:14px">
+      <svg width="24" height="24" viewBox="0 0 32 32" style="overflow:visible">
+        <defs>
+          <linearGradient id="g-ctx" x1="0" x2="1">
+            <stop offset="0%"   stop-color="#3B82F6"/>
+            <stop offset="50%"  stop-color="#1FB6A6"/>
+            <stop offset="100%" stop-color="#34D399"/>
+          </linearGradient>
+        </defs>
+        <path d="M 5 11 Q 11 7, 16 11 T 27 11"
+              fill="none" stroke="url(#g-ctx)" stroke-width="2" stroke-linecap="round"
+              stroke-dasharray="30"
+              style="animation: ft-thinking-draw-new 1.8s ease-in-out infinite"/>
+        <path d="M 5 21 Q 11 25, 16 21 T 27 21"
+              fill="none" stroke="url(#g-ctx)" stroke-width="2" stroke-linecap="round"
+              stroke-dasharray="30"
+              style="animation: ft-thinking-draw-new 1.8s ease-in-out infinite; animation-delay: 0.3s"/>
+      </svg>
+      <span>Denkt nach …</span>
+    </div>
+    <div class="caption" style="margin-left:auto">so wird es im Chat aussehen</div>
+  </div>
+</body>
+</html>

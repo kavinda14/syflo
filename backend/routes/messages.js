@@ -16,6 +16,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const { getLLMClient } = require('../llm');
+const { streamWithTools } = require('../tools');
 
 const MAX_TEXT_FILE_BYTES = 64 * 1024;
 
@@ -139,7 +140,7 @@ module.exports = (db, UPLOADS_DIR) => {
 
     // Kontext aufbauen — System-Prompt + Eltern-Chat (falls Branch) + Historie
     const contextMessages = [];
-    const systemBase = 'You are a friendly and helpful assistant. Emoji usage rule: place ONE relevant emoji at the start of each markdown heading (#, ##, ###) or bolded section title to act as a visual anchor for that section. Do NOT use emojis inside regular sentences, paragraphs, or list items — keep prose plain so it reads cleanly. When explaining concepts, always use analogies and real-world comparisons to make things easy to understand. When the user attaches images, examine them carefully and describe what you see when relevant.';
+    const systemBase = 'You are a friendly and helpful assistant. Formatting rules: (1) Use proper Markdown for headings — always include a SPACE between the hash characters and the heading text: `# Heading`, `## Subheading`, `### Sub-subheading`. Never write `#Heading` without a space — it will not render as a heading. (2) Place ONE relevant emoji at the start of each markdown heading or bolded section title to act as a visual anchor for that section. Do NOT use emojis inside regular sentences, paragraphs, or list items — keep prose plain so it reads cleanly. (3) When explaining concepts, always use analogies and real-world comparisons to make things easy to understand. (4) When the user attaches images, examine them carefully and describe what you see when relevant.';
 
     if (chat.parent_id) {
       const parentMessages = db.prepare(
@@ -181,20 +182,22 @@ module.exports = (db, UPLOADS_DIR) => {
 
     try {
       const { client, model } = getLLMClient(db);
-      const stream = await client.chat.completions.create({
+
+      // Tool-Use-Loop: das LLM darf eigenständig web_search aufrufen. Beim
+      // Tool-Call streamen wir spezielle SSE-Events ans Frontend, damit es
+      // "Searching the web…" anzeigen und die Quellen unter der Antwort
+      // auflisten kann.
+      const fullContent = await streamWithTools({
+        client,
         model,
         messages: contextMessages,
-        stream: true,
-      });
-
-      let fullContent = '';
-      for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta?.content || '';
-        if (delta) {
-          fullContent += delta;
+        onText: (delta) => {
           res.write(`data: ${JSON.stringify({ delta })}\n\n`);
-        }
-      }
+        },
+        onToolEvent: (evt) => {
+          res.write(`data: ${JSON.stringify({ tool: evt })}\n\n`);
+        },
+      });
 
       const assistantMsgId = crypto.randomUUID();
       const assistantNow = new Date().toISOString();
@@ -208,21 +211,51 @@ module.exports = (db, UPLOADS_DIR) => {
       ).get(req.params.chatId);
 
       if (chat.title === 'New Chat' || msgCount.count <= 2) {
-        const words = (content || 'Anhang').trim().split(/\s+/);
-        let newTitle = words.slice(0, 5).join(' ');
-        if (words.length > 5) newTitle += '…';
+        // Hard caps so the sidebar list and mindmap stay readable even if the
+        // LLM ignores the word-limit instruction (some smaller models do).
+        const MAX_TITLE_WORDS = 4;
+        const MAX_TITLE_CHARS = 40;
+
+        // Fallback: first few words of the user's message, in case the LLM call fails.
+        let newTitle = (content || 'Chat')
+          .trim()
+          .split(/\s+/)
+          .slice(0, MAX_TITLE_WORDS)
+          .join(' ');
 
         try {
           const { client: titleClient, model: titleModel } = getLLMClient(db);
           const titleCompletion = await titleClient.chat.completions.create({
             model: titleModel,
             messages: [
-              { role: 'system', content: 'Generate a short 3-5 word title for this chat. Return only the title, no punctuation.' },
-              { role: 'user', content: content || 'Datei-Anhang' },
+              {
+                role: 'system',
+                content:
+                  'Generate a 2 to 4 word title for this chat. ' +
+                  'Output ONLY the title — no quotes, no punctuation, no markdown, no labels, no extra commentary. ' +
+                  'Examples: React hooks tutorial / Bicycle repair guide / Berlin trip planning / Linear algebra basics.',
+              },
+              { role: 'user', content: content || 'New chat' },
             ],
           });
-          newTitle = titleCompletion.choices[0].message.content.trim();
+          const raw = titleCompletion.choices[0]?.message?.content || '';
+          if (raw.trim()) newTitle = raw.trim();
         } catch (_) { /* Fallback genügt */ }
+
+        // Sanitize whatever the LLM returned: strip wrapping quotes/backticks,
+        // strip trailing punctuation, drop any line breaks the model added, and
+        // enforce the word + character caps.
+        newTitle = newTitle
+          .replace(/[\r\n]+/g, ' ')
+          .replace(/^["'`*_]+|["'`*_.!?,;:]+$/g, '')
+          .trim()
+          .split(/\s+/)
+          .slice(0, MAX_TITLE_WORDS)
+          .join(' ');
+        if (newTitle.length > MAX_TITLE_CHARS) {
+          newTitle = newTitle.slice(0, MAX_TITLE_CHARS - 1).trimEnd() + '…';
+        }
+        if (!newTitle) newTitle = 'New Chat';
 
         db.prepare('UPDATE chats SET title = ? WHERE id = ?').run(newTitle, req.params.chatId);
       }

@@ -130,6 +130,10 @@ export default function App() {
     setActiveChat(prev => prev ? { ...prev, messages: [...prev.messages, tempUser, tempAssistant] } : prev);
     setStreaming(true);
 
+    // Accumulate sources from any web_search tool calls during this stream.
+    // We keep them outside React state so multiple rapid updates don't race.
+    let streamingSources: import('./types').SearchSource[] = [];
+
     try {
       // Stream the response — onDelta appends each chunk to the placeholder message.
       const { userMessage, assistantMessage } = await api.sendMessageStream(
@@ -147,13 +151,35 @@ export default function App() {
           });
         },
         attachments,
+        (evt) => {
+          // Tool-event from the LLM. Phase 'result' for web_search carries
+          // the sources we want to display under the assistant's answer.
+          // Phase 'call' is ignored here — the regular ThinkingIndicator is
+          // already showing while the tool runs, which is enough feedback.
+          if (evt.phase !== 'result' || evt.name !== 'web_search' || !evt.result?.results) return;
+          streamingSources = [...streamingSources, ...evt.result.results];
+          const snapshot = streamingSources;
+          setActiveChat(prev => {
+            if (!prev) return prev;
+            return {
+              ...prev,
+              messages: prev.messages.map(m =>
+                m.id === tempAssistantId ? { ...m, sources: snapshot } : m
+              ),
+            };
+          });
+        },
       );
 
       // Replace the temporary messages with the real persisted ones from the server.
+      // Carry the in-session sources over so the UI keeps showing them.
       setActiveChat(prev => {
         if (!prev) return prev;
         const filtered = prev.messages.filter(m => m.id !== tempUserId && m.id !== tempAssistantId);
-        return { ...prev, messages: [...filtered, userMessage, assistantMessage] };
+        const assistantWithSources = streamingSources.length > 0
+          ? { ...assistantMessage, sources: streamingSources }
+          : assistantMessage;
+        return { ...prev, messages: [...filtered, userMessage, assistantWithSources] };
       });
 
       // Refresh the sidebar to pick up the auto-generated title after the first message.

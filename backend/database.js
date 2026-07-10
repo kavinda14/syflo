@@ -1,7 +1,16 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const fs = require('fs');
 
-const DB_PATH = path.join(__dirname, 'flowtalk.db');
+// In production (Tauri-bundled app), the backend folder is read-only inside
+// the .app bundle. The Tauri Rust wrapper sets FLOWTALK_DATA_DIR to a
+// per-user writable location (e.g. ~/Library/Application Support/app.flowtalk).
+// In normal development (running `npm start` from backend/), no env var is
+// set and we fall back to the backend folder for backwards compatibility.
+const DATA_DIR = process.env.FLOWTALK_DATA_DIR || __dirname;
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+
+const DB_PATH = path.join(DATA_DIR, 'flowtalk.db');
 
 function createDb(dbPath = DB_PATH) {
   const db = new Database(dbPath);

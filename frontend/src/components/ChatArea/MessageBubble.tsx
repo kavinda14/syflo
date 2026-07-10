@@ -213,7 +213,53 @@ export function MessageBubble({ message, isStreaming, onWordRightClick, branchWo
         {isStreaming && processedContent && (
           <span className="inline-block w-2 h-4 bg-gray-400 animate-pulse rounded-sm ml-0.5" />
         )}
+
+        {message.sources && message.sources.length > 0 && (
+          <SourcesList sources={message.sources} />
+        )}
       </div>
+    </div>
+  );
+}
+
+// Compact citation strip rendered under an assistant answer that used
+// web_search. Each source is a small chip with the site's hostname; clicking
+// opens the full URL in a new tab. The full title shows as tooltip on hover.
+function SourcesList({ sources }: { sources: NonNullable<Message['sources']> }) {
+  // De-duplicate by URL — the same article can come from multiple engines.
+  const seen = new Set<string>();
+  const unique = sources.filter(s => {
+    if (seen.has(s.url)) return false;
+    seen.add(s.url);
+    return true;
+  });
+  if (unique.length === 0) return null;
+
+  return (
+    <div className="mt-4 pt-3 border-t border-gray-100">
+      <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
+        Sources
+      </p>
+      <ol className="flex flex-wrap gap-1.5">
+        {unique.slice(0, 8).map((s, i) => {
+          let host = '';
+          try { host = new URL(s.url).hostname.replace(/^www\./, ''); } catch (_) { host = s.url; }
+          return (
+            <li key={s.url}>
+              <a
+                href={s.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={s.title}
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 hover:bg-gray-200 text-xs text-gray-700 transition-colors"
+              >
+                <span className="text-gray-400">{i + 1}.</span>
+                <span className="truncate max-w-[14rem]">{host}</span>
+              </a>
+            </li>
+          );
+        })}
+      </ol>
     </div>
   );
 }

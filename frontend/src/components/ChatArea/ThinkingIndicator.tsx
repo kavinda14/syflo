@@ -19,24 +19,24 @@ export function ThinkingIndicator() {
   return (
     <div className="flex items-center gap-2.5 text-sm text-gray-400">
       <svg
-        width={44}
-        height={22}
-        viewBox="0 0 60 28"
+        width={24}
+        height={24}
+        viewBox="0 0 32 32"
         aria-hidden="true"
         style={{ overflow: 'visible' }}
       >
         <style>{`
           @keyframes ft-thinking-draw {
-            0%   { stroke-dashoffset: 70; }
+            0%   { stroke-dashoffset: 30; }
             50%  { stroke-dashoffset: 0; }
-            100% { stroke-dashoffset: -70; }
+            100% { stroke-dashoffset: -30; }
           }
           .ft-thinking-wave {
             fill: none;
             stroke: url(#ft-thinking-grad);
-            stroke-width: 2.5;
+            stroke-width: 2;
             stroke-linecap: round;
-            stroke-dasharray: 70;
+            stroke-dasharray: 30;
             animation: ft-thinking-draw 1.8s ease-in-out infinite;
           }
           .ft-thinking-wave--bot { animation-delay: 0.3s; }
@@ -55,10 +55,10 @@ export function ThinkingIndicator() {
             <stop offset="100%" stopColor="#34D399" />
           </linearGradient>
         </defs>
-        <path className="ft-thinking-wave" d="M 4 10 Q 15 4, 26 10 T 56 10" />
+        <path className="ft-thinking-wave" d="M 5 11 Q 11 7, 16 11 T 27 11" />
         <path
           className="ft-thinking-wave ft-thinking-wave--bot"
-          d="M 4 20 Q 15 26, 26 20 T 56 20"
+          d="M 5 21 Q 11 25, 16 21 T 27 21"
         />
       </svg>
       <AnimatePresence mode="wait">

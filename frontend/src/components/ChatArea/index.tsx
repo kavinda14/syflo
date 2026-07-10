@@ -51,7 +51,6 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
   // race conditions where a stale state value could pull the user back down
   // a moment after they started scrolling up.
   const isPinnedRef = useRef(true);
-  const lastScrollTopRef = useRef(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -79,29 +78,60 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
     setIsPinnedToBottom(pinned);
   };
 
-  // Detect scroll direction. Any upward scroll unpins from the bottom;
-  // reaching the bottom (within threshold) re-pins. Programmatic scrolls
-  // produced by our own scrollIntoView only ever move toward the bottom,
-  // so they never falsely trip the "scrolled up" branch.
+  // Pin/unpin logic uses two signals:
+  //   (1) `scroll` event — for re-pinning when the user scrolls back to the
+  //       bottom on their own. Not reliable for *detecting* user input during
+  //       streaming because it also fires for our own programmatic scrollIntoView
+  //       and races against rapid delta updates.
+  //   (2) `wheel` + `touchmove` events — fired the instant the user expresses
+  //       intent to scroll. We use these to unpin immediately, before any
+  //       potential auto-scroll can yank them back down.
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
-    lastScrollTopRef.current = el.scrollTop;
-    const onScroll = () => {
-      const cur = el.scrollTop;
-      const last = lastScrollTopRef.current;
-      const distanceFromBottom = el.scrollHeight - cur - el.clientHeight;
 
-      if (cur < last - 1) {
-        setPinned(false);
-      } else if (distanceFromBottom < AT_BOTTOM_THRESHOLD) {
+    const onScroll = () => {
+      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+      // Only re-pin here (when user reaches the bottom). Unpinning is owned by
+      // the wheel/touch handlers below, so this never fights the user's input.
+      if (distanceFromBottom < AT_BOTTOM_THRESHOLD) {
         setPinned(true);
       }
-      lastScrollTopRef.current = cur;
     };
+
+    // Wheel (mouse + trackpad): negative deltaY means scrolling up.
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaY < 0) setPinned(false);
+    };
+
+    // Touch: track the previous Y so we can tell direction. Moving the finger
+    // down on screen scrolls the content up, which is what we want to catch.
+    let lastTouchY = 0;
+    const onTouchStart = (e: TouchEvent) => {
+      lastTouchY = e.touches[0]?.clientY ?? 0;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const curY = e.touches[0]?.clientY ?? 0;
+      if (curY > lastTouchY) setPinned(false);
+      lastTouchY = curY;
+    };
+
     el.addEventListener('scroll', onScroll, { passive: true });
-    return () => el.removeEventListener('scroll', onScroll);
-  }, []);
+    el.addEventListener('wheel', onWheel, { passive: true });
+    el.addEventListener('touchstart', onTouchStart, { passive: true });
+    el.addEventListener('touchmove', onTouchMove, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+    };
+    // Depend on chat?.id so the listeners get attached as soon as a chat
+    // actually mounts the scroll container. Without this dep, the effect
+    // runs once on the empty-state render (when scrollContainerRef.current
+    // is null because of the early `if (!chat) return ...` above) and never
+    // again — leaving wheel/touch unpinning permanently broken.
+  }, [chat?.id]);
 
   // Auto-scroll on new content only when the user hasn't scrolled away.
   useEffect(() => {

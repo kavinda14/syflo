@@ -1,4 +1,5 @@
 const express = require('express');
+const fs = require('fs');
 
 module.exports = (db) => {
   const router = express.Router();
@@ -33,7 +34,13 @@ module.exports = (db) => {
     const PREVIEW_LIMIT = 140;
     const map = {};
     all.forEach(c => {
-      const preview = c.preview
+      // For branched chats the parent_word badge in the mindmap already says
+      // what the chat is about. The user's first message in a branched chat
+      // is often a vague follow-up ("go on", "more details", "it means to
+      // come") that adds noise rather than context — so we skip the preview
+      // and let the badge + title speak for themselves.
+      const showPreview = !c.parent_id;
+      const preview = showPreview && c.preview
         ? (c.preview.length > PREVIEW_LIMIT
             ? c.preview.slice(0, PREVIEW_LIMIT).trimEnd() + '…'
             : c.preview)
@@ -110,15 +117,39 @@ module.exports = (db) => {
     res.json(chat);
   });
 
-  // Delete chat and all children
+  // Delete a chat, all its branched children, all their messages, and any
+  // uploaded attachment files. Order matters: attachments rows must go before
+  // messages (FK), and messages before chats. We also unlink the actual files
+  // on disk so the uploads/ dir doesn't grow with orphans.
   router.delete('/:id', (req, res) => {
+    const collectAttachmentPaths = db.prepare('SELECT path FROM attachments WHERE chat_id = ?');
+    const deleteAttachmentsForChat = db.prepare('DELETE FROM attachments WHERE chat_id = ?');
+    const deleteMessagesForChat = db.prepare('DELETE FROM messages WHERE chat_id = ?');
+    const deleteChat = db.prepare('DELETE FROM chats WHERE id = ?');
+    const findChildren = db.prepare('SELECT id FROM chats WHERE parent_id = ?');
+
+    const pathsToUnlink = [];
     const deleteRecursive = (id) => {
-      const children = db.prepare('SELECT id FROM chats WHERE parent_id = ?').all(id);
-      children.forEach(child => deleteRecursive(child.id));
-      db.prepare('DELETE FROM messages WHERE chat_id = ?').run(id);
-      db.prepare('DELETE FROM chats WHERE id = ?').run(id);
+      findChildren.all(id).forEach(child => deleteRecursive(child.id));
+      collectAttachmentPaths.all(id).forEach(row => pathsToUnlink.push(row.path));
+      deleteAttachmentsForChat.run(id);
+      deleteMessagesForChat.run(id);
+      deleteChat.run(id);
     };
-    deleteRecursive(req.params.id);
+
+    try {
+      db.transaction(() => deleteRecursive(req.params.id))();
+    } catch (err) {
+      return res.status(500).json({ error: err.message });
+    }
+
+    // Disk cleanup happens after the DB transaction commits. A unlink error
+    // here is non-fatal — the rows are already gone, so it's just a leaked
+    // file that the user can clean up manually.
+    for (const p of pathsToUnlink) {
+      fs.unlink(p, () => {});
+    }
+
     res.json({ success: true });
   });
 
