@@ -26,9 +26,14 @@ A user-editable name attached to one of the five highlight colors (e.g. "Importa
 _Avoid_: tag, category
 
 **Paper search**:
-Searching external indices for a research paper from the paperclip menu and attaching
+Searching external indices for a research paper from the plus menu and attaching
 the found paper's PDF to the current chat.
 _Avoid_: import, fetch
+
+**Plus menu**:
+The attach menu opened by the round + button in the chat composer, offering
+"Upload file" and "Research paper". The paperclip appears only as an item icon.
+_Avoid_: paperclip menu
 
 **Availability**:
 A paper-search result's PDF status: *open* (importable), *manual* (a free copy exists

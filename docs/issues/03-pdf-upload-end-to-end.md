@@ -2,7 +2,7 @@
 
 ## What to build
 
-Attaching a PDF via the paperclip's "Upload file" option stores it server-side, binds
+Attaching a PDF via the plus menu's "Upload file" option stores it server-side, binds
 it to the current chat tree (**one PDF per chat tree**, ADR-0002 — a second attach
 prompts to start a new tree), and switches the app to the three-column view where the
 PDF renders (pdf.js) with zoom controls. No highlights yet. Backend brings the minimal
