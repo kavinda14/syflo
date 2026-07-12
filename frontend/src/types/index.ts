@@ -136,6 +136,29 @@ export interface CreateHighlightPayload {
   chatId?: string | null;
 }
 
+// Ein Treffer der Paper-Suche (GET /api/papers/search) — gemergte Form aus
+// OpenAlex und arXiv (Slice 07). pdf_candidates ist die komplette
+// Mirror-Kette für den Import-Fallback, wenn der Publisher die primäre
+// URL blockt.
+export interface SearchResult {
+  id: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  citations: number;
+  open_access_pdf_url: string | null;
+  abstract: string | null;
+  doi?: string | null;
+  pdf_candidates?: string[];
+  arxiv_id?: string;
+}
+
+export interface PaperSearchResponse {
+  results: SearchResult[];
+  rate_limited: boolean;
+  retry_after_seconds?: number;
+}
+
 export interface WordPopup {
   word: string;
   context: string;

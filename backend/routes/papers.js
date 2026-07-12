@@ -13,11 +13,139 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { randomUUID } = require('crypto');
+const defaultOpenAlex = require('../openalex');
+const defaultArxiv = require('../arxiv');
+const defaultSemanticScholar = require('../semantic-scholar');
 
-module.exports = (db, uploadsDir) => {
+// ─── URL-Import-Helfer (1:1 aus Syflo routes/papers.js) ─────────────────────
+
+// arXiv /abs/ links are rewritten to the direct /pdf/ URL automatically.
+function normalizeUrl(url) {
+  const arxivAbs = url.match(/^https?:\/\/(?:www\.)?arxiv\.org\/abs\/([^?#]+?)\/?$/i);
+  if (arxivAbs) {
+    const id = arxivAbs[1].replace(/\/+$/, '');
+    return `https://arxiv.org/pdf/${id}.pdf`;
+  }
+  return url;
+}
+
+// Detects whether an HTML response looks like an academic landing page —
+// decides between the granular "publisher blocks" guidance and the friendly
+// not-a-paper error after a failed paste-link fetch.
+function hasAcademicHtmlSignals(html) {
+  if (!html || typeof html !== 'string') return false;
+  return (
+    /<meta[^>]+name=["']citation_(?:pdf_url|doi|author|title|abstract|journal_title|conference_title)["']/i.test(html) ||
+    /<meta[^>]+name=["']dc\.(?:identifier|creator|title)["']/i.test(html) ||
+    /doi\.org\/10\.\d{4,}/i.test(html)
+  );
+}
+
+// URL-shape fallback for the academic-source check (publisher 403s with no
+// body): /doi/ paths and direct .pdf links count as paper-intent.
+function urlLooksLikePaperIntent(urlString) {
+  try {
+    const u = new URL(urlString);
+    const p = u.pathname.toLowerCase();
+    if (p.includes('/doi/')) return true;
+    if (/\.pdf(?:$|\?)/.test(p)) return true;
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Pull a PDF URL out of an HTML landing page via <meta name="citation_pdf_url">
+// (Google Scholar's de-facto standard, emitted by arXiv abs pages, IEEE,
+// Springer, ACM, bioRxiv, OpenReview, Wiley, PubMed Central).
+function extractCitationPdfUrl(html, baseUrl) {
+  const m =
+    html.match(/<meta[^>]+name=["']citation_pdf_url["'][^>]+content=["']([^"']+)["']/i) ||
+    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+name=["']citation_pdf_url["']/i);
+  if (!m) return null;
+  try {
+    return new URL(m[1], baseUrl).href;
+  } catch (_) {
+    return null;
+  }
+}
+
+// ─── Such-Merge-Helfer (1:1 aus Syflo routes/papers.js) ─────────────────────
+
+// Pull the SearchResult[] out of a Promise.allSettled outcome from either
+// search backend (OpenAlex returns `{ results, rate_limited }`, arXiv either
+// returns that same envelope or a bare array). Returns null on rejection.
+function extractSearchResultsArray(settled) {
+  if (!settled || settled.status !== 'fulfilled') return null;
+  const v = settled.value;
+  if (Array.isArray(v)) return v;
+  if (v && Array.isArray(v.results)) return v.results;
+  return null;
+}
+
+// Reduce a search result to a stable comparison key: lowercased, punctuation
+// stripped, multi-space collapsed — arXiv occasionally hyphenates/colonifies
+// titles differently from journal copies.
+function normalizeTitleKey(title) {
+  if (!title || typeof title !== 'string') return '';
+  return title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Merge OpenAlex hits (primary, richer metadata) with arXiv hits, removing
+// duplicates via DOI and normalized title. arXiv-unique hits append after the
+// OpenAlex block. When both sides carry the same paper, arXiv's year wins
+// (OpenAlex stamps re-indexed preprints with the current year — see the
+// project memory on publication_year) and its id fills arxiv_id.
+function mergeSearchResults(openalexResults, arxivResults) {
+  const merged = [];
+  const seenDois = new Set();
+  const seenTitles = new Set();
+  const titleIndex = new Map();
+
+  const addIfFresh = (r) => {
+    if (!r || !r.title) return;
+    const doiKey = typeof r.doi === 'string' ? r.doi.toLowerCase() : null;
+    const titleKey = normalizeTitleKey(r.title);
+    if (doiKey && seenDois.has(doiKey)) return;
+    if (titleKey && seenTitles.has(titleKey)) return;
+    if (doiKey) seenDois.add(doiKey);
+    if (titleKey) {
+      seenTitles.add(titleKey);
+      titleIndex.set(titleKey, merged.length);
+    }
+    merged.push(r);
+  };
+
+  for (const r of openalexResults) addIfFresh(r);
+  for (const r of arxivResults) {
+    if (!r || !r.title) continue;
+    const titleKey = normalizeTitleKey(r.title);
+    if (titleKey && titleIndex.has(titleKey)) {
+      const idx = titleIndex.get(titleKey);
+      const existing = merged[idx];
+      if (r.year && existing.year !== r.year) existing.year = r.year;
+      if (r.id && !existing.arxiv_id) existing.arxiv_id = r.id;
+      continue;
+    }
+    addIfFresh(r);
+  }
+  return merged;
+}
+
+module.exports = (db, uploadsDir, options = {}) => {
   const router = express.Router();
   const papersDir = path.join(uploadsDir, 'papers');
   fs.mkdirSync(papersDir, { recursive: true });
+
+  // Search backends + URL fetch, injectable for tests (same pattern as Syflo).
+  const openalexSearchFn = options.openalexSearchFn || defaultOpenAlex.searchPapers;
+  const arxivSearchFn = options.arxivSearchFn || defaultArxiv.searchPapers;
+  const ssSearchFn = options.searchFn || defaultSemanticScholar.searchPapers;
+  const urlFetchFn = options.urlFetchFn || fetch;
 
   const upload = multer({
     storage: multer.diskStorage({
@@ -102,6 +230,202 @@ module.exports = (db, uploadsDir) => {
     return res.status(201).json(formatPaper(row));
   });
 
+  // GET /api/papers/search?q=... — paper search for the "Research paper"
+  // modal (1:1 aus Syflo). OpenAlex + arXiv parallel, Ergebnisse gemergt und
+  // dedupliziert; Semantic Scholar nur, wenn BEIDE Primärquellen ausfallen.
+  // Muss vor GET /:id registriert sein, sonst frisst die :id-Route den Pfad.
+  //
+  // Response shape: { results, rate_limited, retry_after_seconds? }
+  router.get('/search', async (req, res, next) => {
+    const q = (req.query.q || '').toString().trim();
+    if (!q) return res.json({ results: [], rate_limited: false });
+
+    const [oaSettled, arxivSettled] = await Promise.allSettled([
+      openalexSearchFn(q, 20),
+      arxivSearchFn(q, 20),
+    ]);
+
+    const oaList = extractSearchResultsArray(oaSettled);
+    const arxivList = extractSearchResultsArray(arxivSettled);
+
+    // Both primary backends failed — try SS as a last-resort fallback so
+    // the user gets *something* during a transient OpenAlex+arXiv outage.
+    if (oaList === null && arxivList === null) {
+      if (oaSettled.status === 'rejected') {
+        console.warn('[search] OpenAlex failed:', oaSettled.reason?.message);
+      }
+      if (arxivSettled.status === 'rejected') {
+        console.warn('[search] arXiv failed:', arxivSettled.reason?.message);
+      }
+      try {
+        const out = await ssSearchFn(q, 8);
+        if (Array.isArray(out)) return res.json({ results: out, rate_limited: false });
+        return res.json(out);
+      } catch (ssErr) {
+        return next(ssErr);
+      }
+    }
+
+    const merged = mergeSearchResults(oaList || [], arxivList || []);
+    return res.json({ results: merged, rate_limited: false });
+  });
+
+  // POST /api/papers/from-url — import a paper by URL and bind it to the
+  // chat tree of `chat_id` (Syflo-Port ohne Marker: das Paper ist sofort
+  // 'ready'). Body: { url, chat_id, title?, fallback_urls? }.
+  //
+  // ADR-0002 gilt wie beim Upload: hat der Tree schon ein PDF, antwortet die
+  // Route mit 409 'tree-has-pdf' — geprüft VOR dem Download, damit der
+  // Fehlfall keine Publisher-Requests verbrennt.
+  router.post('/from-url', async (req, res) => {
+    const { url, title, fallback_urls, chat_id } = req.body || {};
+    if (!url || typeof url !== 'string') {
+      return res.status(400).json({ error: 'url is required' });
+    }
+    const chatId = (chat_id || '').toString();
+    if (!chatId) {
+      return res.status(400).json({ error: 'chat_id is required' });
+    }
+    const root = resolveRoot(chatId);
+    if (!root) return res.status(404).json({ error: 'Chat not found' });
+    if (root.paper_id) {
+      return res.status(409).json({ error: 'tree-has-pdf', root_chat_id: root.id });
+    }
+
+    const normalizedUrl = normalizeUrl(url.trim());
+    let parsed;
+    try {
+      parsed = new URL(normalizedUrl);
+      if (!/^https?:$/.test(parsed.protocol)) throw new Error('http/https only');
+    } catch (_) {
+      return res.status(400).json({ error: 'Invalid URL' });
+    }
+
+    // Candidate chain: primary URL first, then caller-supplied fallbacks
+    // (a SearchResult's pdf_candidates — institutional/preprint mirrors for
+    // when the publisher 403s). Malformed entries are silently dropped.
+    const candidates = [normalizedUrl];
+    if (Array.isArray(fallback_urls)) {
+      for (const u of fallback_urls) {
+        if (typeof u !== 'string' || !u.trim()) continue;
+        const n = normalizeUrl(u.trim());
+        if (n === normalizedUrl) continue;
+        try {
+          const p = new URL(n);
+          if (!/^https?:$/.test(p.protocol)) continue;
+          candidates.push(n);
+        } catch (_) { /* skip malformed entries */ }
+      }
+    }
+
+    // Browser-like headers — some publishers reject anonymous fetches but
+    // accept normal browser traffic.
+    const PDF_FETCH_HEADERS = {
+      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36 FlowTalk/1.0',
+      Accept: 'application/pdf,application/octet-stream,*/*;q=0.8',
+    };
+    async function tryDownload(candidate) {
+      let r;
+      try {
+        r = await urlFetchFn(candidate, { headers: PDF_FETCH_HEADERS });
+      } catch (e) {
+        return { ok: false, status: 0, error: e.message };
+      }
+      if (!r.ok) return { ok: false, status: r.status, error: `HTTP ${r.status}` };
+      const ct = (r.headers?.get?.('content-type') || '').toLowerCase();
+      const looksLikePdf =
+        ct.includes('application/pdf') ||
+        ct.includes('application/octet-stream') ||
+        ct === '' ||
+        /\.pdf(\?|$)/i.test(candidate);
+      if (!looksLikePdf) {
+        // HTML landing page? <meta name="citation_pdf_url"> gives us the real
+        // PDF URL to queue as the next candidate; academic meta tags decide
+        // between "publisher blocks" guidance and the not-a-paper error.
+        let resolvedPdfUrl = null;
+        let academicHtml = false;
+        if (ct.includes('text/html') && typeof r.text === 'function') {
+          try {
+            const html = await r.text();
+            resolvedPdfUrl = extractCitationPdfUrl(html, candidate);
+            academicHtml = hasAcademicHtmlSignals(html);
+          } catch (_) { /* fällt in den Wrong-content-type-Fehler durch */ }
+        }
+        return { ok: false, status: r.status, error: `wrong content-type (${ct || 'unknown'})`, contentType: ct, resolvedPdfUrl, academicHtml };
+      }
+      try {
+        const buf = Buffer.from(await r.arrayBuffer());
+        return { ok: true, buffer: buf, contentType: ct };
+      } catch (e) {
+        return { ok: false, status: r.status, error: `read failed: ${e.message}` };
+      }
+    }
+
+    // Walk the chain until one candidate yields a real PDF; candidates
+    // discovered mid-walk via citation_pdf_url get visited in the same pass.
+    let chosen = null;
+    const attempts = [];
+    const seenCandidates = new Set(candidates);
+    for (let i = 0; i < candidates.length; i++) {
+      const candidate = candidates[i];
+      const out = await tryDownload(candidate);
+      attempts.push({ url: candidate, ...out });
+      if (out.ok) { chosen = { candidate, buffer: out.buffer }; break; }
+      if (out.resolvedPdfUrl && !seenCandidates.has(out.resolvedPdfUrl)) {
+        candidates.push(out.resolvedPdfUrl);
+        seenCandidates.add(out.resolvedPdfUrl);
+      }
+    }
+    if (!chosen) {
+      // No academic signal anywhere (neither response evidence nor URL
+      // shape) → the URL was never going to yield a paper.
+      const hasAcademicSignal =
+        attempts.some(
+          (a) => a.academicHtml || (a.resolvedPdfUrl && typeof a.resolvedPdfUrl === 'string'),
+        ) || candidates.some(urlLooksLikePaperIntent);
+      if (!hasAcademicSignal) {
+        return res.status(422).json({ error: 'not-a-paper' });
+      }
+
+      const last = attempts[attempts.length - 1];
+      const blocked = attempts.some((a) => a.status === 403 || a.status === 401);
+      const wrongType = attempts.some((a) => /wrong content-type/.test(a.error || ''));
+      let message;
+      if (blocked) {
+        message = `Publisher blocks direct download (HTTP ${attempts.find((a) => a.status === 403 || a.status === 401).status}). Open the paper in your browser, save the PDF, then use "Upload file". Tried: ${candidates.join(', ')}`;
+      } else if (wrongType && attempts.every((a) => a.status === 200)) {
+        message = `Source returned a webpage, not a PDF. For arXiv, paste the /abs/ or /pdf/ link; for other sites, paste the direct PDF URL.`;
+      } else {
+        message = `Could not fetch a PDF from any candidate URL. Last error: ${last?.error || 'unknown'}. Tried: ${candidates.join(', ')}`;
+      }
+      const status = blocked ? 502 : (wrongType ? 415 : 502);
+      return res.status(status).json({ error: message, attempts });
+    }
+
+    // Save the PDF, create the row as 'ready' (no Marker), bind to the root.
+    const id = randomUUID();
+    const pdfPath = path.join(papersDir, `${id}.pdf`);
+    fs.writeFileSync(pdfPath, chosen.buffer);
+
+    const fallback = title || parsed.pathname.split('/').pop() || 'imported.pdf';
+    const originalName = fallback.endsWith('.pdf') ? fallback : `${fallback}.pdf`;
+    const row = {
+      id,
+      title: originalName.replace(/\.pdf$/i, ''),
+      authors_json: null,
+      uploaded_at: new Date().toISOString(),
+      pdf_path: pdfPath,
+      status: 'ready',
+    };
+    const tx = db.transaction(() => {
+      insertPaper.run(row);
+      bindPaperToChat.run(row.id, root.id);
+    });
+    tx();
+
+    return res.status(201).json(formatPaper(row));
+  });
+
   // GET /api/papers/for-chat/:chatId — the paper bound to this chat's tree
   // (resolved via the root), or { paper: null }. Used to restore the
   // three-column view on reload.
@@ -132,3 +456,9 @@ module.exports = (db, uploadsDir) => {
 
   return router;
 };
+
+// Helfer-Exporte für Unit-Tests (gleiches Muster wie in Syflo).
+module.exports.mergeSearchResults = mergeSearchResults;
+module.exports.normalizeTitleKey = normalizeTitleKey;
+module.exports.extractSearchResultsArray = extractSearchResultsArray;
+module.exports.normalizeUrl = normalizeUrl;

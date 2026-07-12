@@ -263,3 +263,45 @@ describe('api.getTreePaper', () => {
     expect(await api.getTreePaper('c1')).toBeNull();
   });
 });
+
+// ─── searchPapers / importPaperFromUrl (Slice 07) ───────────────────────────
+
+describe('api.searchPapers', () => {
+  it('fetches merged results from GET /api/papers/search', async () => {
+    const body = { results: [{ id: 'W1', title: 'A' }], rate_limited: false };
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse(body));
+    const result = await api.searchPapers('attention is all');
+    expect(fetch).toHaveBeenCalledWith('/api/papers/search?q=attention%20is%20all');
+    expect(result).toEqual(body);
+  });
+});
+
+describe('api.importPaperFromUrl', () => {
+  it('POSTs url, title, fallbacks and chat_id', async () => {
+    const paper = { id: 'p1', title: 'A', authors: [], uploaded_at: 'x', status: 'ready', pdf_url: '/api/papers/p1/pdf' };
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse(paper, 201));
+    const result = await api.importPaperFromUrl('c1', 'https://arxiv.org/pdf/1.pdf', 'A', ['https://mirror/1.pdf']);
+    expect(fetch).toHaveBeenCalledWith('/api/papers/from-url', expect.objectContaining({
+      method: 'POST',
+      body: JSON.stringify({
+        url: 'https://arxiv.org/pdf/1.pdf',
+        title: 'A',
+        fallback_urls: ['https://mirror/1.pdf'],
+        chat_id: 'c1',
+      }),
+    }));
+    expect(result).toEqual(paper);
+  });
+
+  it('wirft TreeHasPdfError bei 409 (ADR-0002)', async () => {
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse({ error: 'tree-has-pdf', root_chat_id: 'root1' }, 409));
+    const err = await api.importPaperFromUrl('c1', 'https://arxiv.org/pdf/1.pdf').catch(e => e);
+    expect(err).toBeInstanceOf(TreeHasPdfError);
+    expect((err as TreeHasPdfError).rootChatId).toBe('root1');
+  });
+
+  it('reicht die Backend-Fehlermeldung durch (z. B. Publisher-Block)', async () => {
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse({ error: 'Publisher blocks direct download (HTTP 403).' }, 502));
+    await expect(api.importPaperFromUrl('c1', 'https://x/y.pdf')).rejects.toThrow(/Publisher blocks/);
+  });
+});

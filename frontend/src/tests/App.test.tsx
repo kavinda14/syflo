@@ -50,6 +50,8 @@ vi.mock('../api', () => ({
     deleteHighlight: vi.fn(),
     getHighlightLabels: vi.fn(),
     setHighlightLabel: vi.fn(),
+    searchPapers: vi.fn(),
+    importPaperFromUrl: vi.fn(),
   },
 }));
 
@@ -167,5 +169,85 @@ describe('App — PDF upload end-to-end (slice 03)', () => {
     fireEvent.click(screen.getByTestId('new-tree-cancel'));
     expect(screen.queryByTestId('new-tree-prompt')).not.toBeInTheDocument();
     expect(api.createChat).not.toHaveBeenCalled();
+  });
+});
+
+describe('App — Paper-Suche (Slice 07)', () => {
+  const searchResult = {
+    id: 'W1',
+    title: 'Attention Is All You Need',
+    authors: ['Vaswani'],
+    year: 2017,
+    citations: 80000,
+    open_access_pdf_url: 'https://arxiv.org/pdf/1706.03762.pdf',
+    abstract: null,
+    doi: '10.1/attention',
+    pdf_candidates: ['https://arxiv.org/pdf/1706.03762.pdf', 'https://mirror.example.org/1706.pdf'],
+  };
+
+  async function openSearchModal() {
+    await openRootChat();
+    fireEvent.click(screen.getByTestId('attach-plus-button'));
+    fireEvent.click(screen.getByTestId('attach-menu-research-paper'));
+    await waitFor(() => expect(screen.getByTestId('paper-search-modal')).toBeInTheDocument());
+  }
+
+  async function searchAndFind() {
+    vi.mocked(api.searchPapers).mockResolvedValue({ results: [searchResult], rate_limited: false });
+    fireEvent.change(screen.getByTestId('paper-search-input'), { target: { value: 'attention' } });
+    fireEvent.click(screen.getByTestId('paper-search-submit'));
+    await waitFor(() => expect(screen.getByTestId('paper-search-import-W1')).toBeInTheDocument());
+  }
+
+  it('"Research paper" im Plus-Menü öffnet das Such-Modal', async () => {
+    await openSearchModal();
+    expect(screen.getByText('Add a research paper')).toBeInTheDocument();
+  });
+
+  it('Import bindet das Paper an den Tree und öffnet die Drei-Spalten-Ansicht', async () => {
+    await openSearchModal();
+    await searchAndFind();
+
+    vi.mocked(api.importPaperFromUrl).mockResolvedValue(paper);
+    fireEvent.click(screen.getByTestId('paper-search-import-W1'));
+
+    await waitFor(() =>
+      expect(api.importPaperFromUrl).toHaveBeenCalledWith(
+        'c1',
+        'https://arxiv.org/pdf/1706.03762.pdf',
+        'Attention Is All You Need',
+        ['https://mirror.example.org/1706.pdf'], // primäre URL aus den Fallbacks entfernt
+      ),
+    );
+    await waitFor(() => expect(screen.queryByTestId('paper-search-modal')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId('chat-pane-right')).toBeInTheDocument());
+    expect(screen.getAllByTestId('pdf-page-canvas').length).toBeGreaterThan(0);
+  });
+
+  it('Import in einen Tree mit PDF zeigt den Neuer-Tree-Dialog (ADR-0002)', async () => {
+    await openSearchModal();
+    await searchAndFind();
+
+    vi.mocked(api.importPaperFromUrl).mockRejectedValueOnce(new TreeHasPdfError('c1'));
+    fireEvent.click(screen.getByTestId('paper-search-import-W1'));
+
+    await waitFor(() => expect(screen.getByTestId('new-tree-prompt')).toBeInTheDocument());
+    expect(screen.getByTestId('new-tree-prompt')).toHaveTextContent('Attention Is All You Need');
+
+    // Bestätigen: neuer Root-Chat + Import dorthin.
+    const newChat: Chat = { ...rootChat, id: 'c2', title: 'New Chat' };
+    vi.mocked(api.createChat).mockResolvedValue(newChat);
+    vi.mocked(api.getChat).mockResolvedValue({ ...newChat, messages: [], children: [] });
+    vi.mocked(api.importPaperFromUrl).mockResolvedValue(paper);
+    fireEvent.click(screen.getByTestId('new-tree-confirm'));
+
+    await waitFor(() =>
+      expect(api.importPaperFromUrl).toHaveBeenLastCalledWith(
+        'c2',
+        'https://arxiv.org/pdf/1706.03762.pdf',
+        'Attention Is All You Need',
+        ['https://mirror.example.org/1706.pdf'],
+      ),
+    );
   });
 });

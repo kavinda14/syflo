@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Mic, MicOff, Plus, ArrowUp, ChevronDown, Paperclip, FileText } from 'lucide-react';
+import { Mic, MicOff, Plus, ArrowUp, ChevronDown, Paperclip, FileText, BookOpen } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { AttachmentChip } from './AttachmentChip';
 import { VoiceWaveform } from './VoiceWaveform';
@@ -23,6 +23,9 @@ interface Props {
   // "Upload file" im Plus-Menü: bindet ein PDF an den Chat tree (ein PDF pro
   // Tree, ADR-0002). Ohne Handler wird der Menüeintrag nicht angeboten.
   onUploadPdf?: (file: File) => void;
+  // "Research paper" im Plus-Menü: öffnet das Paper-Such-Modal (Slice 07).
+  // Ohne Handler wird der Menüeintrag nicht angeboten.
+  onOpenPaperSearch?: () => void;
 }
 
 // Wählt eine Alias-Basis je nach MIME-Typ — z. B. "@foto" für Bilder.
@@ -36,7 +39,7 @@ function aliasBaseFor(mimetype: string): string {
 // auto-scroll once the user manually scrolls back down.
 const AT_BOTTOM_THRESHOLD = 8;
 
-export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightClick, onSelectChat, onUploadPdf }: Props) {
+export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightClick, onSelectChat, onUploadPdf, onOpenPaperSearch }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
@@ -571,11 +574,28 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                       <button
                         role="menuitem"
                         onClick={handlePickPdf}
-                        className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
+                        className="w-full flex items-start gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
                         data-testid="attach-menu-upload-pdf"
                       >
-                        <FileText size={16} className="text-gray-500 shrink-0" />
-                        <span>Upload file</span>
+                        <FileText size={16} className="text-gray-500 shrink-0 mt-0.5" />
+                        <span className="min-w-0">
+                          <span className="block">Upload file</span>
+                          <span className="block text-xs text-gray-400">Attach a PDF from your computer</span>
+                        </span>
+                      </button>
+                    )}
+                    {onOpenPaperSearch && (
+                      <button
+                        role="menuitem"
+                        onClick={() => { setPickerMenuOpen(false); onOpenPaperSearch(); }}
+                        className="w-full flex items-start gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
+                        data-testid="attach-menu-research-paper"
+                      >
+                        <BookOpen size={16} className="text-gray-500 shrink-0 mt-0.5" />
+                        <span className="min-w-0">
+                          <span className="block">Research paper</span>
+                          <span className="block text-xs text-gray-400">Search arXiv &amp; OpenAlex and import</span>
+                        </span>
                       </button>
                     )}
                   </div>

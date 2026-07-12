@@ -19,11 +19,12 @@ import { ChatArea } from './components/ChatArea';
 import { MindMap } from './components/MindMap';
 import { PdfView, type PdfHighlightSelection } from './components/PdfView';
 import { HighlightActionsMenu } from './components/PdfView/HighlightActionsMenu';
+import { PaperSearchModal } from './components/PaperSearch';
 import { FloatingPopup } from './components/FloatingPopup';
 import { api, TreeHasPdfError } from './api';
 import { useHighlights } from './hooks/useHighlights';
 import { contextAroundSelection } from './pdf/selection';
-import type { Chat, ChatDetail, Highlight, HighlightColor, LocalAttachment, Message, Paper, Settings, WordPopup } from './types';
+import type { Chat, ChatDetail, Highlight, HighlightColor, LocalAttachment, Message, Paper, SearchResult, Settings, WordPopup } from './types';
 
 export default function App() {
   // chats: the full tree shown in the sidebar
@@ -48,9 +49,17 @@ export default function App() {
   // the left sidebar, PDF center, active branch's chat right.
   const [treePaper, setTreePaper] = useState<Paper | null>(null);
 
-  // pendingPdf: a file whose upload was rejected with 'tree-has-pdf'. While
-  // set, the new-tree prompt is shown; confirming uploads it into a fresh tree.
-  const [pendingPdf, setPendingPdf] = useState<File | null>(null);
+  // pendingAttach: an attach attempt (local file OR search-import URL) that
+  // was rejected with 'tree-has-pdf'. While set, the new-tree prompt is
+  // shown; confirming attaches it to a fresh tree (ADR-0002).
+  const [pendingAttach, setPendingAttach] = useState<
+    | { kind: 'file'; file: File }
+    | { kind: 'url'; url: string; title: string; fallbacks: string[] }
+    | null
+  >(null);
+
+  // Paper-Such-Modal (Slice 07), geöffnet über "Research paper" im Plus-Menü.
+  const [paperSearchOpen, setPaperSearchOpen] = useState(false);
 
   // popup: the word the user right-clicked on, plus its screen coordinates
   const [popup, setPopup] = useState<WordPopup | null>(null);
@@ -154,22 +163,60 @@ export default function App() {
       await refreshTree(); // the root node now shows its PDF tag
     } catch (err) {
       if (err instanceof TreeHasPdfError) {
-        setPendingPdf(file);
+        setPendingAttach({ kind: 'file', file });
         return;
       }
       console.error('Failed to upload PDF:', err);
     }
   };
 
-  // Confirmed the new-tree prompt: create a fresh root chat, upload the held
-  // PDF there, and switch to it (handleSelectChat re-fetches the tree paper).
+  // Import from the paper-search modal (Slice 07): download server-side and
+  // bind to the active tree. 409 → same new-tree prompt as the upload path.
+  // Other errors re-throw so the modal can render them inline.
+  const handleImportPaper = async (result: SearchResult) => {
+    if (!activeChatId || !result.open_access_pdf_url) return;
+    const fallbacks = (result.pdf_candidates || []).filter(
+      (u) => u && u !== result.open_access_pdf_url,
+    );
+    try {
+      const paper = await api.importPaperFromUrl(
+        activeChatId,
+        result.open_access_pdf_url,
+        result.title,
+        fallbacks,
+      );
+      setTreePaper(paper);
+      setPaperSearchOpen(false);
+      await refreshTree();
+    } catch (err) {
+      if (err instanceof TreeHasPdfError) {
+        setPaperSearchOpen(false);
+        setPendingAttach({
+          kind: 'url',
+          url: result.open_access_pdf_url,
+          title: result.title,
+          fallbacks,
+        });
+        return;
+      }
+      throw err;
+    }
+  };
+
+  // Confirmed the new-tree prompt: create a fresh root chat, attach the held
+  // PDF (upload or URL import) there, and switch to it (handleSelectChat
+  // re-fetches the tree paper).
   const handleStartNewTreeWithPdf = async () => {
-    const file = pendingPdf;
-    setPendingPdf(null);
-    if (!file) return;
+    const pending = pendingAttach;
+    setPendingAttach(null);
+    if (!pending) return;
     try {
       const chat = await api.createChat('New Chat');
-      await api.uploadPaper(chat.id, file);
+      if (pending.kind === 'file') {
+        await api.uploadPaper(chat.id, pending.file);
+      } else {
+        await api.importPaperFromUrl(chat.id, pending.url, pending.title, pending.fallbacks);
+      }
       await refreshTree();
       await handleSelectChat(chat.id);
     } catch (err) {
@@ -471,6 +518,7 @@ export default function App() {
               onWordRightClick={handleWordRightClick}
               onSelectChat={handleSelectChat}
               onUploadPdf={handleUploadPdf}
+              onOpenPaperSearch={() => setPaperSearchOpen(true)}
             />
           </div>
         </div>
@@ -478,7 +526,7 @@ export default function App() {
 
       {/* New-tree prompt: shown when an upload hit a tree that already has a
           PDF (ADR-0002). Confirming moves the file into a fresh chat tree. */}
-      {pendingPdf && (
+      {pendingAttach && (
         <div
           className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center"
           data-testid="new-tree-prompt"
@@ -490,11 +538,13 @@ export default function App() {
             </div>
             <p className="text-sm text-gray-600 leading-relaxed mb-5">
               Each chat tree holds one PDF. Start a new tree with{' '}
-              <span className="font-medium text-gray-800">{pendingPdf.name}</span>?
+              <span className="font-medium text-gray-800">
+                {pendingAttach.kind === 'file' ? pendingAttach.file.name : pendingAttach.title}
+              </span>?
             </p>
             <div className="flex justify-end gap-2">
               <button
-                onClick={() => setPendingPdf(null)}
+                onClick={() => setPendingAttach(null)}
                 className="px-3.5 py-1.5 rounded-lg text-sm text-gray-700 border border-gray-200 hover:bg-gray-50 transition-colors"
                 data-testid="new-tree-cancel"
               >
@@ -523,6 +573,15 @@ export default function App() {
         onPickColor={popupHasPdfSelection ? handlePickColor : undefined}
         activeColor={activeColor}
       />
+
+      {/* Paper-search modal (Slice 07): search OpenAlex + arXiv and import
+          an open-access PDF into the active chat tree. */}
+      {paperSearchOpen && activeChatId && (
+        <PaperSearchModal
+          onClose={() => setPaperSearchOpen(false)}
+          onImport={handleImportPaper}
+        />
+      )}
 
       {/* Actions menu for an existing highlight: recolor / delete / open
           linked chat (Slice 06). */}

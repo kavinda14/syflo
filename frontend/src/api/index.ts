@@ -10,7 +10,7 @@
  * chunk so the UI can update in real time — exactly like ChatGPT's typing effect.
  */
 
-import type { Chat, ChatDetail, CreateHighlightPayload, Highlight, HighlightColor, HighlightLabels, LocalAttachment, Message, Paper, Settings, SettingsUpdate, ToolEvent } from '../types';
+import type { Chat, ChatDetail, CreateHighlightPayload, Highlight, HighlightColor, HighlightLabels, LocalAttachment, Message, Paper, PaperSearchResponse, Settings, SettingsUpdate, ToolEvent } from '../types';
 
 const BASE = '/api';
 
@@ -146,6 +146,37 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch tree paper');
     const body = await res.json();
     return body.paper ?? null;
+  },
+
+  // Paper-Suche (Slice 07): OpenAlex + arXiv gemergt, SS-Fallback im Backend.
+  async searchPapers(q: string): Promise<PaperSearchResponse> {
+    const res = await fetch(`${BASE}/papers/search?q=${encodeURIComponent(q)}`);
+    if (!res.ok) throw new Error('Search failed');
+    return res.json();
+  },
+
+  // Importiert ein Paper per URL und bindet es an den Tree von chatId.
+  // Wirft TreeHasPdfError bei 409 (ADR-0002) — gleiche Semantik wie uploadPaper.
+  async importPaperFromUrl(
+    chatId: string,
+    url: string,
+    title?: string,
+    fallbackUrls?: string[],
+  ): Promise<Paper> {
+    const res = await fetch(`${BASE}/papers/from-url`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, title, fallback_urls: fallbackUrls, chat_id: chatId }),
+    });
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      throw new TreeHasPdfError(body.root_chat_id ?? null);
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to import paper');
+    }
+    return res.json();
   },
 
   // ─── Highlights + Labels (Syflo-Port, Slices 04–06) ───────────────────────
