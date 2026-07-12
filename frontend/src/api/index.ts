@@ -10,7 +10,7 @@
  * chunk so the UI can update in real time — exactly like ChatGPT's typing effect.
  */
 
-import type { Chat, ChatDetail, LocalAttachment, Message, Paper, Settings, SettingsUpdate, ToolEvent } from '../types';
+import type { Chat, ChatDetail, CreateHighlightPayload, Highlight, HighlightColor, HighlightLabels, LocalAttachment, Message, Paper, Settings, SettingsUpdate, ToolEvent } from '../types';
 
 const BASE = '/api';
 
@@ -146,6 +146,71 @@ export const api = {
     if (!res.ok) throw new Error('Failed to fetch tree paper');
     const body = await res.json();
     return body.paper ?? null;
+  },
+
+  // ─── Highlights + Labels (Syflo-Port, Slices 04–06) ───────────────────────
+
+  async listHighlights(paperId: string): Promise<Highlight[]> {
+    const res = await fetch(`${BASE}/papers/${paperId}/highlights`);
+    if (!res.ok) throw new Error('Failed to fetch highlights');
+    return res.json();
+  },
+
+  async createHighlight(paperId: string, payload: CreateHighlightPayload): Promise<Highlight> {
+    const res = await fetch(`${BASE}/papers/${paperId}/highlights`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to create highlight');
+    }
+    return res.json();
+  },
+
+  async updateHighlight(
+    hid: string,
+    patch: { color?: HighlightColor; chatId?: string | null },
+  ): Promise<Highlight> {
+    const res = await fetch(`${BASE}/highlights/${hid}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update highlight');
+    }
+    return res.json();
+  },
+
+  async deleteHighlight(hid: string): Promise<void> {
+    const res = await fetch(`${BASE}/highlights/${hid}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error('Failed to delete highlight');
+  },
+
+  // Global per-color labels. Shared across all trees; renaming a color
+  // propagates immediately to every open popup via useLabels.
+  async getHighlightLabels(): Promise<HighlightLabels> {
+    const res = await fetch(`${BASE}/highlight-labels`);
+    if (!res.ok) throw new Error('Failed to fetch labels');
+    return res.json();
+  },
+
+  // Pass an empty/whitespace label to reset that color to its default. Names
+  // longer than 24 chars are truncated server-side.
+  async setHighlightLabel(color: HighlightColor, label: string): Promise<{ color: HighlightColor; label: string }> {
+    const res = await fetch(`${BASE}/highlight-labels/${color}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ label }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update label');
+    }
+    return res.json();
   },
 
   // Fetches a short explanation for a word, used by the floating popup.

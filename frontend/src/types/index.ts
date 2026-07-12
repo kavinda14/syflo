@@ -74,6 +74,68 @@ export interface Paper {
   pdf_url: string;
 }
 
+// ─── Highlights (Syflo-Port, Slices 04–06) ──────────────────────────────────
+
+export type HighlightColor = 'yellow' | 'green' | 'blue' | 'pink' | 'orange';
+export const HIGHLIGHT_COLORS: readonly HighlightColor[] = [
+  'yellow',
+  'green',
+  'blue',
+  'pink',
+  'orange',
+] as const;
+
+// Global per-color labels. User-renamable via the FloatingPopup's edit mode.
+// Stored server-side so they survive reloads.
+export type HighlightLabels = Record<HighlightColor, string>;
+export const DEFAULT_HIGHLIGHT_LABELS: HighlightLabels = {
+  yellow: 'Important',
+  green: 'Agree',
+  blue: 'Reference',
+  pink: 'Question',
+  orange: 'Disagree',
+};
+
+// One rectangle in *unscaled* (zoom=1) page-local coordinates. All four
+// values are normalized by the capture zoom and multiplied by the live zoom
+// at render time — the fix for Syflo's only-position-normalized zoom bug.
+export interface HighlightRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface Highlight {
+  id: string;
+  paperId: string;
+  color: HighlightColor;
+  text: string;
+  pageNumber: number;
+  rects: HighlightRect[];
+  // Optional anchor context (~30 chars of text either side of the quote).
+  // Reserved for future re-anchoring when a PDF's underlying text reflows.
+  prefix?: string | null;
+  suffix?: string | null;
+  quoteHash?: string | null;
+  chatId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// Payload accepted by POST /api/papers/:id/highlights. Mirrors the backend
+// validation; required fields here mean "the request will 400 without them".
+export interface CreateHighlightPayload {
+  color: HighlightColor;
+  text: string;
+  pageNumber: number;
+  rects: HighlightRect[];
+  prefix?: string | null;
+  suffix?: string | null;
+  quoteHash?: string | null;
+  chatId?: string | null;
+}
+
 export interface WordPopup {
   word: string;
   context: string;

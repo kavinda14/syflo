@@ -72,7 +72,60 @@ function createDb(dbPath = DB_PATH) {
       pdf_path TEXT NOT NULL,
       status TEXT NOT NULL CHECK(status IN ('parsing', 'ready', 'failed'))
     );
+
+    -- Text-Anker für Highlights (Syflo-Port, Slice 04). bbox_json hält die
+    -- Multi-Rects in Zoom=1-Seitenkoordinaten; start/end_offset bleiben für
+    -- Schema-Kompatibilität mit Syflo erhalten (dort: Markdown-Anker).
+    CREATE TABLE IF NOT EXISTS text_ranges (
+      id TEXT PRIMARY KEY,
+      paper_id TEXT NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+      start_offset INTEGER,
+      end_offset INTEGER,
+      text TEXT,
+      page_number INTEGER,
+      bbox_json TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_text_ranges_paper ON text_ranges(paper_id);
+
+    -- Farbige Highlights. chat_id ist ON DELETE SET NULL — ein Highlight
+    -- überlebt seinen Branch (Issue 06). Da SQLite-FKs hier nicht global
+    -- aktiviert sind, entkoppelt der Chat-Delete-Pfad (routes/chats.js)
+    -- zusätzlich explizit.
+    CREATE TABLE IF NOT EXISTS highlights (
+      id TEXT PRIMARY KEY,
+      text_range_id TEXT NOT NULL REFERENCES text_ranges(id) ON DELETE CASCADE,
+      chat_id TEXT REFERENCES chats(id) ON DELETE SET NULL,
+      color TEXT NOT NULL CHECK(color IN ('yellow','green','blue','pink','orange')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_highlights_chat ON highlights(chat_id);
+    CREATE INDEX IF NOT EXISTS idx_highlights_text_range ON highlights(text_range_id);
+
+    -- Globale Farb-Labels — eine Zeile pro Farbe, vom Nutzer umbenennbar
+    -- (Slice 05). Seeds unten via INSERT OR IGNORE, damit Umbenennungen
+    -- Backend-Neustarts überleben.
+    CREATE TABLE IF NOT EXISTS highlight_labels (
+      color TEXT PRIMARY KEY CHECK(color IN ('yellow','green','blue','pink','orange')),
+      label TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
+
+  const seedLabel = db.prepare(
+    'INSERT OR IGNORE INTO highlight_labels (color, label, updated_at) VALUES (?, ?, ?)',
+  );
+  const nowIso = new Date().toISOString();
+  const defaultLabels = {
+    yellow: 'Important',
+    green: 'Agree',
+    blue: 'Reference',
+    pink: 'Question',
+    orange: 'Disagree',
+  };
+  for (const [color, label] of Object.entries(defaultLabels)) {
+    seedLabel.run(color, label, nowIso);
+  }
 
   // Migration: chats.paper_id (nullable) — der Root-Chat eines Trees ist an
   // ein Paper gebunden. Idempotent: PRAGMA-Check vor ALTER (wie in Syflo).

@@ -44,6 +44,12 @@ vi.mock('../api', () => ({
     renameChat: vi.fn(),
     sendMessageStream: vi.fn(),
     explainWord: vi.fn(),
+    listHighlights: vi.fn(),
+    createHighlight: vi.fn(),
+    updateHighlight: vi.fn(),
+    deleteHighlight: vi.fn(),
+    getHighlightLabels: vi.fn(),
+    setHighlightLabel: vi.fn(),
   },
 }));
 
@@ -76,6 +82,10 @@ beforeEach(() => {
   vi.mocked(api.getChat).mockResolvedValue(rootDetail);
   vi.mocked(api.getTreePaper).mockResolvedValue(null);
   vi.mocked(api.uploadPaper).mockResolvedValue(paper);
+  vi.mocked(api.listHighlights).mockResolvedValue([]);
+  vi.mocked(api.getHighlightLabels).mockResolvedValue({
+    yellow: 'Important', green: 'Agree', blue: 'Reference', pink: 'Question', orange: 'Disagree',
+  });
 });
 
 /** Render the app and open the root chat from the sidebar. */

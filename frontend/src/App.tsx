@@ -12,15 +12,18 @@
  * temporary messages are swapped for the real persisted versions from the server.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileText } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { MindMap } from './components/MindMap';
-import { PdfView } from './components/PdfView';
+import { PdfView, type PdfHighlightSelection } from './components/PdfView';
+import { HighlightActionsMenu } from './components/PdfView/HighlightActionsMenu';
 import { FloatingPopup } from './components/FloatingPopup';
 import { api, TreeHasPdfError } from './api';
-import type { Chat, ChatDetail, LocalAttachment, Message, Paper, Settings, WordPopup } from './types';
+import { useHighlights } from './hooks/useHighlights';
+import { contextAroundSelection } from './pdf/selection';
+import type { Chat, ChatDetail, Highlight, HighlightColor, LocalAttachment, Message, Paper, Settings, WordPopup } from './types';
 
 export default function App() {
   // chats: the full tree shown in the sidebar
@@ -53,6 +56,34 @@ export default function App() {
   const [popup, setPopup] = useState<WordPopup | null>(null);
   const [explanation, setExplanation] = useState('');
   const [loadingExplanation, setLoadingExplanation] = useState(false);
+
+  // Persistent colored highlights on the tree's PDF (Slice 04). Scoped to
+  // the bound paper; empty while no PDF is open.
+  const {
+    highlights,
+    create: createHighlight,
+    update: updateHighlight,
+    remove: removeHighlight,
+  } = useHighlights(treePaper?.id ?? null);
+
+  // Selection captured by PdfView at right-click time — read when the user
+  // picks a color or opens a branch, so the highlight can be saved even
+  // though the live Selection collapses when focus moves into the popup.
+  const pendingPdfSelectionRef = useRef<PdfHighlightSelection | null>(null);
+  // Highlight already saved for the current popup's selection (first color
+  // pick creates it; further picks recolor it; "Open as new chat" links it).
+  const savedHighlightIdRef = useRef<string | null>(null);
+  // Whether the open popup came from a PDF selection — only then does it
+  // show the color row.
+  const [popupHasPdfSelection, setPopupHasPdfSelection] = useState(false);
+  // The color the next highlight gets (ring + checkmark in the popup).
+  const [activeColor, setActiveColor] = useState<HighlightColor>('yellow');
+  // Actions menu for an existing highlight (recolor / delete / open chat).
+  const [highlightMenu, setHighlightMenu] = useState<{
+    highlight: Highlight;
+    x: number;
+    y: number;
+  } | null>(null);
 
   // Re-fetch the sidebar tree whenever a chat is created, renamed, or deleted.
   const refreshTree = useCallback(async () => {
@@ -253,6 +284,15 @@ export default function App() {
 
   // Fetch an explanation for a right-clicked word and show the floating popup.
   const handleWordRightClick = async (wordPopup: WordPopup) => {
+    // Chat-message right-clicks have no PDF selection behind them — reset the
+    // PDF-popup state so the color row doesn't leak into chat popups.
+    pendingPdfSelectionRef.current = null;
+    savedHighlightIdRef.current = null;
+    setPopupHasPdfSelection(false);
+    await openPopupWithExplanation(wordPopup);
+  };
+
+  const openPopupWithExplanation = async (wordPopup: WordPopup) => {
     setPopup(wordPopup);
     setExplanation('');
     setLoadingExplanation(true);
@@ -270,13 +310,104 @@ export default function App() {
     }
   };
 
-  // Create a child chat branched from the word shown in the popup, then open it.
+  // Right-click over the PDF: PdfView already captured the selection into
+  // pendingPdfSelectionRef (its onCaptureHighlight fires before this). Open
+  // the popup with the selected text; the definition uses the surrounding
+  // lines as context (Issue 06), not just the selection itself.
+  const handlePdfContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const sel = pendingPdfSelectionRef.current;
+    if (!sel) return; // no live selection — nothing to define or highlight
+    savedHighlightIdRef.current = null;
+    setPopupHasPdfSelection(true);
+    void openPopupWithExplanation({
+      word: sel.text,
+      context: contextAroundSelection(sel.text),
+      x: e.clientX,
+      y: e.clientY,
+    });
+  };
+
+  // Swatch click in the popup (Slice 04): the first pick persists a highlight
+  // on the captured selection; further picks recolor that same highlight so
+  // trying colors doesn't leave a trail of duplicates.
+  const handlePickColor = async (color: HighlightColor) => {
+    setActiveColor(color);
+    const saved = savedHighlightIdRef.current;
+    if (saved) {
+      await updateHighlight(saved, { color });
+      return;
+    }
+    const sel = pendingPdfSelectionRef.current;
+    if (!sel) return;
+    const created = await createHighlight({
+      color,
+      text: sel.text,
+      pageNumber: sel.pageNumber,
+      rects: sel.rects,
+    });
+    if (created) savedHighlightIdRef.current = created.id;
+  };
+
+  // Create a child chat branched from the word shown in the popup, then open
+  // it. When the popup came from a PDF selection (Slice 06), also save a
+  // highlight in the active color linked to the new branch — or link the
+  // highlight a swatch click already created.
   const handleOpenChildChat = async (word: string) => {
     if (!activeChatId) return;
     setPopup(null);
+    const fromPdf = popupHasPdfSelection;
+    const sel = pendingPdfSelectionRef.current;
+    const saved = savedHighlightIdRef.current;
+    pendingPdfSelectionRef.current = null;
+    savedHighlightIdRef.current = null;
     const child = await api.createChat(`About: ${word}`, activeChatId, word);
+    if (fromPdf) {
+      if (saved) {
+        await updateHighlight(saved, { chatId: child.id });
+      } else if (sel) {
+        await createHighlight({
+          color: activeColor,
+          text: sel.text,
+          pageNumber: sel.pageNumber,
+          rects: sel.rects,
+          chatId: child.id,
+        });
+      }
+    }
     await refreshTree();
     await handleSelectChat(child.id);
+  };
+
+  // Close the popup and forget the captured selection. A highlight created
+  // via a swatch click stays — picking a color IS the save (Issue 04).
+  const handleClosePopup = () => {
+    setPopup(null);
+    pendingPdfSelectionRef.current = null;
+    savedHighlightIdRef.current = null;
+    setPopupHasPdfSelection(false);
+  };
+
+  // Recolor from the highlight actions menu. The menu stays open (matches
+  // Syflo) so adjacent highlights can be compared; patch the menu's copy so
+  // the ring moves to the new color immediately.
+  const handleMenuChangeColor = async (color: HighlightColor) => {
+    const menu = highlightMenu;
+    if (!menu) return;
+    setHighlightMenu({ ...menu, highlight: { ...menu.highlight, color } });
+    await updateHighlight(menu.highlight.id, { color });
+  };
+
+  const handleMenuDelete = async () => {
+    const menu = highlightMenu;
+    setHighlightMenu(null);
+    if (menu) await removeHighlight(menu.highlight.id);
+  };
+
+  const handleMenuOpenChat = async () => {
+    const menu = highlightMenu;
+    setHighlightMenu(null);
+    if (menu?.highlight.chatId) await handleSelectChat(menu.highlight.chatId);
   };
 
   return (
@@ -313,7 +444,16 @@ export default function App() {
             right — the tree stays in the left sidebar. */}
         <div className={`${viewMode === 'mindmap' ? 'h-1/2' : 'h-full'} flex overflow-hidden`}>
           {treePaper && activeChatId && (
-            <PdfView pdfUrl={treePaper.pdf_url} title={treePaper.title ?? undefined} />
+            <PdfView
+              pdfUrl={treePaper.pdf_url}
+              title={treePaper.title ?? undefined}
+              highlights={highlights}
+              onCaptureHighlight={(sel) => { pendingPdfSelectionRef.current = sel; }}
+              onContextMenu={handlePdfContextMenu}
+              onColorHighlightClick={(h, e) =>
+                setHighlightMenu({ highlight: h, x: e.clientX, y: e.clientY })
+              }
+            />
           )}
           <div
             className={
@@ -372,14 +512,31 @@ export default function App() {
         </div>
       )}
 
-      {/* Floating popup: appears near the right-clicked word with its explanation */}
+      {/* Floating popup: appears near the right-clicked word with its explanation.
+          For PDF selections it also shows the highlight color row. */}
       <FloatingPopup
         popup={popup}
         explanation={explanation}
         loading={loadingExplanation}
-        onClose={() => setPopup(null)}
+        onClose={handleClosePopup}
         onOpenChildChat={handleOpenChildChat}
+        onPickColor={popupHasPdfSelection ? handlePickColor : undefined}
+        activeColor={activeColor}
       />
+
+      {/* Actions menu for an existing highlight: recolor / delete / open
+          linked chat (Slice 06). */}
+      {highlightMenu && (
+        <HighlightActionsMenu
+          highlight={highlightMenu.highlight}
+          x={highlightMenu.x}
+          y={highlightMenu.y}
+          onClose={() => setHighlightMenu(null)}
+          onChangeColor={handleMenuChangeColor}
+          onDelete={handleMenuDelete}
+          onOpenChat={handleMenuOpenChat}
+        />
+      )}
     </div>
   );
 }

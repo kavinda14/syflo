@@ -25,6 +25,9 @@ function createApp(db) {
   app.use('/api/chats/:chatId/messages', require('./routes/messages')(db, UPLOADS_DIR));
   app.use('/api/explain', require('./routes/explain')(db));
   app.use('/api/papers', require('./routes/papers')(db, UPLOADS_DIR));
+  // Highlights + Labels: Pfade wie /api/papers/:id/highlights und
+  // /api/highlight-labels leben in einem Router, daher Mount auf /api.
+  app.use('/api', require('./routes/highlights')(db));
   app.use('/api/settings', require('./routes/settings')(db));
   app.use('/api/search', require('./routes/search')());
 

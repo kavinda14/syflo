@@ -127,6 +127,10 @@ module.exports = (db) => {
     const deleteMessagesForChat = db.prepare('DELETE FROM messages WHERE chat_id = ?');
     const deleteChat = db.prepare('DELETE FROM chats WHERE id = ?');
     const findChildren = db.prepare('SELECT id FROM chats WHERE parent_id = ?');
+    // Highlights überleben ihren Branch (Issue 06): nur entkoppeln, nie
+    // löschen. Explizit statt per FK, weil foreign_keys hier nicht global
+    // aktiviert sind — das Schema-SET-NULL allein würde nichts tun.
+    const unlinkHighlightsForChat = db.prepare('UPDATE highlights SET chat_id = NULL WHERE chat_id = ?');
 
     const pathsToUnlink = [];
     const deleteRecursive = (id) => {
@@ -134,6 +138,7 @@ module.exports = (db) => {
       collectAttachmentPaths.all(id).forEach(row => pathsToUnlink.push(row.path));
       deleteAttachmentsForChat.run(id);
       deleteMessagesForChat.run(id);
+      unlinkHighlightsForChat.run(id);
       deleteChat.run(id);
     };
 
