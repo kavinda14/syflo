@@ -14,7 +14,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { SquarePen, GitBranch, ArrowLeft, Pencil, Trash2, ChevronDown } from 'lucide-react';
+import { SquarePen, GitBranch, ArrowLeft, Pencil, Trash2, ChevronDown, FileText } from 'lucide-react';
 import { ChatTree, RenameInput } from './ChatTree';
 import { Logo } from '../Logo';
 import { SettingsModal } from '../SettingsModal';
@@ -280,6 +280,17 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
                       />
                     ) : (
                       <span className="flex-1 truncate text-[13px]">{chat.title}</span>
+                    )}
+                    {/* PDF tag on trees with a bound paper — same badge as on
+                        the tree's root node (design/mockup-pdf-layout.html) */}
+                    {!isRenaming && chat.paper_id && (
+                      <span
+                        className="ml-auto shrink-0 inline-flex items-center gap-[3px] text-[10px] font-semibold tracking-wide text-gray-500 bg-gray-50 border border-gray-200 rounded-[5px] px-1.5 py-px"
+                        data-testid="root-list-pdf-tag"
+                      >
+                        <FileText size={9} />
+                        PDF
+                      </span>
                     )}
                   </div>
                 );

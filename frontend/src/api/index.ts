@@ -10,9 +10,20 @@
  * chunk so the UI can update in real time — exactly like ChatGPT's typing effect.
  */
 
-import type { Chat, ChatDetail, LocalAttachment, Message, Settings, SettingsUpdate, ToolEvent } from '../types';
+import type { Chat, ChatDetail, LocalAttachment, Message, Paper, Settings, SettingsUpdate, ToolEvent } from '../types';
 
 const BASE = '/api';
+
+// Fehler beim Paper-Upload in einen Tree, der schon ein PDF hat (ADR-0002).
+// Trägt die Root-Chat-ID, damit die UI den Neuer-Tree-Dialog anbieten kann.
+export class TreeHasPdfError extends Error {
+  rootChatId: string | null;
+  constructor(rootChatId: string | null) {
+    super('tree-has-pdf');
+    this.name = 'TreeHasPdfError';
+    this.rootChatId = rootChatId;
+  }
+}
 
 export const api = {
   // Fetches the full chat tree (all chats with their children nested).
@@ -111,6 +122,30 @@ export const api = {
     }
 
     throw new Error('Stream ended without completion');
+  },
+
+  // Lädt ein PDF hoch und bindet es an den Chat tree von chatId (ans Root).
+  // Wirft TreeHasPdfError, wenn der Tree schon ein PDF hat (ADR-0002).
+  async uploadPaper(chatId: string, file: File): Promise<Paper> {
+    const fd = new FormData();
+    fd.append('chat_id', chatId);
+    fd.append('pdf', file, file.name);
+    const res = await fetch(`${BASE}/papers`, { method: 'POST', body: fd });
+    if (res.status === 409) {
+      const body = await res.json().catch(() => ({}));
+      throw new TreeHasPdfError(body.root_chat_id ?? null);
+    }
+    if (!res.ok) throw new Error('Failed to upload PDF');
+    return res.json();
+  },
+
+  // Das an den Tree dieses Chats gebundene Paper (oder null) — stellt die
+  // Drei-Spalten-Ansicht nach einem Reload wieder her.
+  async getTreePaper(chatId: string): Promise<Paper | null> {
+    const res = await fetch(`${BASE}/papers/for-chat/${chatId}`);
+    if (!res.ok) throw new Error('Failed to fetch tree paper');
+    const body = await res.json();
+    return body.paper ?? null;
   },
 
   // Fetches a short explanation for a word, used by the floating popup.

@@ -59,7 +59,27 @@ function createDb(dbPath = DB_PATH) {
       key TEXT PRIMARY KEY,
       value TEXT
     );
+
+    -- Papers: PDF, das an einen Chat tree gebunden ist (ADR-0002: max. eins
+    -- pro Tree, der Root-Chat trägt paper_id). Minimaler Syflo-Port ohne
+    -- Marker-Pipeline — status ist direkt 'ready', 'parsing'/'failed' bleiben
+    -- im CHECK für Schema-Kompatibilität mit Syflo.
+    CREATE TABLE IF NOT EXISTS papers (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      authors_json TEXT,
+      uploaded_at TEXT NOT NULL,
+      pdf_path TEXT NOT NULL,
+      status TEXT NOT NULL CHECK(status IN ('parsing', 'ready', 'failed'))
+    );
   `);
+
+  // Migration: chats.paper_id (nullable) — der Root-Chat eines Trees ist an
+  // ein Paper gebunden. Idempotent: PRAGMA-Check vor ALTER (wie in Syflo).
+  const chatsCols = db.prepare('PRAGMA table_info(chats)').all();
+  if (!chatsCols.some((c) => c.name === 'paper_id')) {
+    db.exec('ALTER TABLE chats ADD COLUMN paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL');
+  }
 
   return db;
 }

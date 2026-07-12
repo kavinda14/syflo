@@ -24,6 +24,7 @@ function createApp(db) {
   app.use('/api/chats', require('./routes/chats')(db));
   app.use('/api/chats/:chatId/messages', require('./routes/messages')(db, UPLOADS_DIR));
   app.use('/api/explain', require('./routes/explain')(db));
+  app.use('/api/papers', require('./routes/papers')(db, UPLOADS_DIR));
   app.use('/api/settings', require('./routes/settings')(db));
   app.use('/api/search', require('./routes/search')());
 

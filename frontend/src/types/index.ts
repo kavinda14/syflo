@@ -10,6 +10,9 @@ export interface Chat {
   // auf einen Blick sieht, worum es im Chat geht.
   preview?: string | null;
   message_count?: number;
+  // ID des an den Tree gebundenen PDFs — nur am Root gesetzt (ADR-0002).
+  // Rendert den PDF-Tag am Root-Knoten im Chat tree.
+  paper_id?: string | null;
 }
 
 export interface Attachment {
@@ -58,6 +61,17 @@ export interface Message {
 export interface ChatDetail extends Chat {
   messages: Message[];
   children: Chat[];
+}
+
+// Ein an einen Chat tree gebundenes PDF (ADR-0002: max. eins pro Tree).
+// Minimaler Syflo-Port ohne Parsing — status ist praktisch immer 'ready'.
+export interface Paper {
+  id: string;
+  title: string | null;
+  authors: string[];
+  uploaded_at: string;
+  status: 'parsing' | 'ready' | 'failed';
+  pdf_url: string;
 }
 
 export interface WordPopup {

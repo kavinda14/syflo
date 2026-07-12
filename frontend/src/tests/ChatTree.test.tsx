@@ -79,6 +79,17 @@ describe('ChatTree – rendering', () => {
     const inactiveRow = screen.getByText('Beta').closest('div');
     expect(inactiveRow?.className).not.toContain('bg-blue-50');
   });
+
+  it('zeigt den PDF-Tag nur an Knoten mit paper_id (ADR-0002)', () => {
+    const withPaper: Chat[] = [
+      { ...flatChats[0], paper_id: 'p1' },
+      flatChats[1],
+    ];
+    render(<ChatTree chats={withPaper} {...baseProps} />);
+    const tags = screen.getAllByTestId('tree-pdf-tag');
+    expect(tags.length).toBe(1);
+    expect(screen.getByText('Alpha').closest('div')).toContainElement(tags[0]);
+  });
 });
 
 describe('ChatTree – interactions', () => {

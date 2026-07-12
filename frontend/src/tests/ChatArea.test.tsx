@@ -124,6 +124,27 @@ describe('ChatArea', () => {
       fireEvent.mouseDown(document.body);
       expect(screen.queryByTestId('attach-menu')).not.toBeInTheDocument();
     });
+
+    it('zeigt "Upload file" und reicht das gewählte PDF an onUploadPdf weiter', () => {
+      const onUploadPdf = vi.fn();
+      render(<ChatArea chat={mockChat} loading={false} {...defaultProps} onUploadPdf={onUploadPdf} />);
+      fireEvent.click(screen.getByTestId('attach-plus-button'));
+      expect(screen.getByTestId('attach-menu-upload-pdf')).toHaveTextContent(/Upload file/i);
+
+      fireEvent.click(screen.getByTestId('attach-menu-upload-pdf'));
+      // Menü schließt sich; das versteckte PDF-Input nimmt die Datei entgegen.
+      expect(screen.queryByTestId('attach-menu')).not.toBeInTheDocument();
+      const pdf = new File(['%PDF-1.4'], 'lease.pdf', { type: 'application/pdf' });
+      const input = screen.getByTestId('pdf-file-input');
+      fireEvent.change(input, { target: { files: [pdf] } });
+      expect(onUploadPdf).toHaveBeenCalledWith(pdf);
+    });
+
+    it('zeigt "Upload file" nicht ohne onUploadPdf-Handler', () => {
+      render(<ChatArea chat={mockChat} loading={false} {...defaultProps} />);
+      fireEvent.click(screen.getByTestId('attach-plus-button'));
+      expect(screen.queryByTestId('attach-menu-upload-pdf')).not.toBeInTheDocument();
+    });
   });
 
   describe('Anhang-Alias umbenennen und @-Autocomplete', () => {

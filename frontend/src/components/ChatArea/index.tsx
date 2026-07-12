@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Mic, MicOff, Plus, ArrowUp, ChevronDown, Paperclip } from 'lucide-react';
+import { Mic, MicOff, Plus, ArrowUp, ChevronDown, Paperclip, FileText } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { AttachmentChip } from './AttachmentChip';
 import { VoiceWaveform } from './VoiceWaveform';
@@ -20,6 +20,9 @@ interface Props {
   onSendMessage: (content: string, attachments: LocalAttachment[]) => Promise<void>;
   onWordRightClick: (popup: WordPopup) => void;
   onSelectChat: (id: string) => void;
+  // "Upload file" im Plus-Menü: bindet ein PDF an den Chat tree (ein PDF pro
+  // Tree, ADR-0002). Ohne Handler wird der Menüeintrag nicht angeboten.
+  onUploadPdf?: (file: File) => void;
 }
 
 // Wählt eine Alias-Basis je nach MIME-Typ — z. B. "@foto" für Bilder.
@@ -33,7 +36,7 @@ function aliasBaseFor(mimetype: string): string {
 // auto-scroll once the user manually scrolls back down.
 const AT_BOTTOM_THRESHOLD = 8;
 
-export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightClick, onSelectChat }: Props) {
+export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightClick, onSelectChat, onUploadPdf }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
@@ -55,6 +58,7 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
   const chatColumnClass = 'shrink-0 px-6 sm:px-8';
   const chatColumnStyle = { width: '46rem', maxWidth: 'calc(100% - 3rem)' };
 
@@ -219,6 +223,19 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
   const handlePickFiles = () => {
     setPickerMenuOpen(false);
     fileInputRef.current?.click();
+  };
+
+  // Klick auf "Upload file" im Popover → PDF-Picker öffnen; die gewählte
+  // Datei geht an onUploadPdf (Paper-Upload), nicht in die Message-Anhänge.
+  const handlePickPdf = () => {
+    setPickerMenuOpen(false);
+    pdfInputRef.current?.click();
+  };
+
+  const handlePdfSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onUploadPdf) onUploadPdf(file);
+    if (pdfInputRef.current) pdfInputRef.current.value = '';
   };
 
   // Popover schließt sich, sobald irgendwo außerhalb geklickt wird.
@@ -508,6 +525,15 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                 className="hidden"
                 accept="image/*,text/*,.pdf,.md,.txt,.csv,.json"
               />
+              {/* Verstecktes PDF-Input für "Upload file" (Paper an den Tree binden) */}
+              <input
+                ref={pdfInputRef}
+                type="file"
+                onChange={handlePdfSelected}
+                className="hidden"
+                accept="application/pdf,.pdf"
+                data-testid="pdf-file-input"
+              />
               <div className="relative shrink-0">
                 <button
                   ref={plusButtonRef}
@@ -541,6 +567,17 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                       <Paperclip size={16} className="text-gray-500 shrink-0" />
                       <span>Files and media</span>
                     </button>
+                    {onUploadPdf && (
+                      <button
+                        role="menuitem"
+                        onClick={handlePickPdf}
+                        className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
+                        data-testid="attach-menu-upload-pdf"
+                      >
+                        <FileText size={16} className="text-gray-500 shrink-0" />
+                        <span>Upload file</span>
+                      </button>
+                    )}
                   </div>
                 )}
               </div>

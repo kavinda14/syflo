@@ -13,12 +13,14 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { FileText } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
 import { ChatArea } from './components/ChatArea';
 import { MindMap } from './components/MindMap';
+import { PdfView } from './components/PdfView';
 import { FloatingPopup } from './components/FloatingPopup';
-import { api } from './api';
-import type { Chat, ChatDetail, LocalAttachment, Message, Settings, WordPopup } from './types';
+import { api, TreeHasPdfError } from './api';
+import type { Chat, ChatDetail, LocalAttachment, Message, Paper, Settings, WordPopup } from './types';
 
 export default function App() {
   // chats: the full tree shown in the sidebar
@@ -37,6 +39,15 @@ export default function App() {
 
   // streaming: true while the AI is generating its response
   const [streaming, setStreaming] = useState(false);
+
+  // treePaper: the PDF bound to the active chat's tree (ADR-0002: one per
+  // tree). Non-null switches the app into the three-column layout — tree in
+  // the left sidebar, PDF center, active branch's chat right.
+  const [treePaper, setTreePaper] = useState<Paper | null>(null);
+
+  // pendingPdf: a file whose upload was rejected with 'tree-has-pdf'. While
+  // set, the new-tree prompt is shown; confirming uploads it into a fresh tree.
+  const [pendingPdf, setPendingPdf] = useState<File | null>(null);
 
   // popup: the word the user right-clicked on, plus its screen coordinates
   const [popup, setPopup] = useState<WordPopup | null>(null);
@@ -65,13 +76,19 @@ export default function App() {
     if (!activeChatId && viewMode === 'mindmap') setViewMode('chat');
   }, [activeChatId, viewMode]);
 
-  // Load a chat's messages and mark it as active in the sidebar.
+  // Load a chat's messages and mark it as active in the sidebar. The tree's
+  // paper is fetched alongside so the three-column view survives a reload
+  // (and closes when switching to a tree without a PDF).
   const handleSelectChat = async (id: string) => {
     setActiveChatId(id);
     setLoadingChat(true);
     try {
-      const chat = await api.getChat(id);
+      const [chat, paper] = await Promise.all([
+        api.getChat(id),
+        api.getTreePaper(id).catch(() => null),
+      ]);
       setActiveChat(chat);
+      setTreePaper(paper);
     } finally {
       setLoadingChat(false);
     }
@@ -90,8 +107,43 @@ export default function App() {
     if (activeChatId === id) {
       setActiveChatId(null);
       setActiveChat(null);
+      setTreePaper(null);
     }
     await refreshTree();
+  };
+
+  // "Upload file" from the plus menu: bind the PDF to the active chat's tree.
+  // A 409 from the backend means the tree already has one (ADR-0002) — hold
+  // the file and show the new-tree prompt instead.
+  const handleUploadPdf = async (file: File) => {
+    if (!activeChatId) return;
+    try {
+      const paper = await api.uploadPaper(activeChatId, file);
+      setTreePaper(paper);
+      await refreshTree(); // the root node now shows its PDF tag
+    } catch (err) {
+      if (err instanceof TreeHasPdfError) {
+        setPendingPdf(file);
+        return;
+      }
+      console.error('Failed to upload PDF:', err);
+    }
+  };
+
+  // Confirmed the new-tree prompt: create a fresh root chat, upload the held
+  // PDF there, and switch to it (handleSelectChat re-fetches the tree paper).
+  const handleStartNewTreeWithPdf = async () => {
+    const file = pendingPdf;
+    setPendingPdf(null);
+    if (!file) return;
+    try {
+      const chat = await api.createChat('New Chat');
+      await api.uploadPaper(chat.id, file);
+      await refreshTree();
+      await handleSelectChat(chat.id);
+    } catch (err) {
+      console.error('Failed to start a new tree with PDF:', err);
+    }
   };
 
   // Rename a chat. Also patch the active chat so the header updates instantly.
@@ -255,18 +307,70 @@ export default function App() {
           </div>
         )}
 
-        {/* Chat area: takes full height in chat mode, or the bottom half in mind map mode */}
+        {/* Chat area: takes full height in chat mode, or the bottom half in mind map mode.
+            With a tree PDF open this becomes the three-column layout
+            (design/mockup-pdf-layout.html): PDF center, active branch's chat
+            right — the tree stays in the left sidebar. */}
         <div className={`${viewMode === 'mindmap' ? 'h-1/2' : 'h-full'} flex overflow-hidden`}>
-          <ChatArea
-            chat={activeChat}
-            loading={loadingChat}
-            streaming={streaming}
-            onSendMessage={handleSendMessage}
-            onWordRightClick={handleWordRightClick}
-            onSelectChat={handleSelectChat}
-          />
+          {treePaper && activeChatId && (
+            <PdfView pdfUrl={treePaper.pdf_url} title={treePaper.title ?? undefined} />
+          )}
+          <div
+            className={
+              treePaper && activeChatId
+                ? 'w-[340px] shrink-0 flex overflow-hidden border-l border-gray-200'
+                : 'flex-1 flex overflow-hidden'
+            }
+            data-testid={treePaper && activeChatId ? 'chat-pane-right' : undefined}
+          >
+            <ChatArea
+              chat={activeChat}
+              loading={loadingChat}
+              streaming={streaming}
+              onSendMessage={handleSendMessage}
+              onWordRightClick={handleWordRightClick}
+              onSelectChat={handleSelectChat}
+              onUploadPdf={handleUploadPdf}
+            />
+          </div>
         </div>
       </div>
+
+      {/* New-tree prompt: shown when an upload hit a tree that already has a
+          PDF (ADR-0002). Confirming moves the file into a fresh chat tree. */}
+      {pendingPdf && (
+        <div
+          className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center"
+          data-testid="new-tree-prompt"
+        >
+          <div className="bg-white rounded-xl shadow-xl w-[26rem] max-w-[calc(100vw-2rem)] p-6">
+            <div className="flex items-center gap-2.5 mb-2">
+              <FileText size={18} className="text-blue-500 shrink-0" />
+              <h3 className="text-[15px] font-medium text-gray-900">This chat tree already has a PDF</h3>
+            </div>
+            <p className="text-sm text-gray-600 leading-relaxed mb-5">
+              Each chat tree holds one PDF. Start a new tree with{' '}
+              <span className="font-medium text-gray-800">{pendingPdf.name}</span>?
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setPendingPdf(null)}
+                className="px-3.5 py-1.5 rounded-lg text-sm text-gray-700 border border-gray-200 hover:bg-gray-50 transition-colors"
+                data-testid="new-tree-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleStartNewTreeWithPdf}
+                className="px-3.5 py-1.5 rounded-lg text-sm text-white bg-blue-500 hover:bg-blue-600 transition-colors"
+                data-testid="new-tree-confirm"
+              >
+                Start new tree
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating popup: appears near the right-clicked word with its explanation */}
       <FloatingPopup

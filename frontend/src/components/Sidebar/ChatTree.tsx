@@ -13,7 +13,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
-import { ChevronRight, ChevronDown } from 'lucide-react';
+import { ChevronRight, ChevronDown, FileText } from 'lucide-react';
 import type { Chat } from '../../types';
 
 interface Props {
@@ -77,6 +77,18 @@ function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onR
           />
         ) : (
           <span className="flex-1 truncate text-[13px]">{chat.title}</span>
+        )}
+
+        {/* PDF tag on the root of a tree with a bound paper
+            (design/mockup-pdf-layout.html, ADR-0002) */}
+        {!isRenaming && chat.paper_id && (
+          <span
+            className="ml-auto shrink-0 inline-flex items-center gap-[3px] text-[10px] font-semibold tracking-wide text-gray-500 bg-gray-50 border border-gray-200 rounded-[5px] px-1.5 py-px"
+            data-testid="tree-pdf-tag"
+          >
+            <FileText size={9} />
+            PDF
+          </span>
         )}
       </div>
 

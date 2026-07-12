@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { api } from '../api';
+import { api, TreeHasPdfError } from '../api';
 import type { Message } from '../types';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -210,5 +210,56 @@ describe('api.deleteChat', () => {
     vi.mocked(fetch).mockReturnValue(mockJsonResponse({ success: true }));
     await api.deleteChat('chat42');
     expect(fetch).toHaveBeenCalledWith('/api/chats/chat42', { method: 'DELETE' });
+  });
+});
+
+// ─── uploadPaper / getTreePaper (Slice 03) ──────────────────────────────────
+
+describe('api.uploadPaper', () => {
+  const pdf = new File(['%PDF-1.4'], 'lease.pdf', { type: 'application/pdf' });
+
+  it('POSTs the PDF as multipart form data with the chat_id', async () => {
+    const paper = { id: 'p1', title: 'lease', authors: [], uploaded_at: 'x', status: 'ready', pdf_url: '/api/papers/p1/pdf' };
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse(paper, 201));
+
+    const result = await api.uploadPaper('c1', pdf);
+
+    expect(fetch).toHaveBeenCalledWith('/api/papers', expect.objectContaining({ method: 'POST' }));
+    const body = vi.mocked(fetch).mock.calls[0][1]?.body as FormData;
+    expect(body).toBeInstanceOf(FormData);
+    expect(body.get('chat_id')).toBe('c1');
+    // jsdom klont Dateien beim FormData.append — Identität ist nicht garantiert,
+    // also Name/Typ vergleichen statt toBe.
+    const sent = body.get('pdf') as File;
+    expect(sent.name).toBe('lease.pdf');
+    expect(sent.type).toBe('application/pdf');
+    expect(result).toEqual(paper);
+  });
+
+  it('wirft TreeHasPdfError mit root_chat_id bei 409 (ADR-0002)', async () => {
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse({ error: 'tree-has-pdf', root_chat_id: 'root9' }, 409));
+    const err = await api.uploadPaper('c1', pdf).catch(e => e);
+    expect(err).toBeInstanceOf(TreeHasPdfError);
+    expect((err as TreeHasPdfError).rootChatId).toBe('root9');
+  });
+
+  it('throws a plain error on other failures', async () => {
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse({}, 500));
+    await expect(api.uploadPaper('c1', pdf)).rejects.toThrow('Failed to upload PDF');
+  });
+});
+
+describe('api.getTreePaper', () => {
+  it('returns the paper bound to the chat tree', async () => {
+    const paper = { id: 'p1', title: 'lease', authors: [], uploaded_at: 'x', status: 'ready', pdf_url: '/api/papers/p1/pdf' };
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse({ paper }));
+    const result = await api.getTreePaper('c1');
+    expect(fetch).toHaveBeenCalledWith('/api/papers/for-chat/c1');
+    expect(result).toEqual(paper);
+  });
+
+  it('returns null when the tree has no PDF', async () => {
+    vi.mocked(fetch).mockReturnValue(mockJsonResponse({ paper: null }));
+    expect(await api.getTreePaper('c1')).toBeNull();
   });
 });
