@@ -384,7 +384,7 @@ function findRoot(chats: Chat[], chatId: string | null | undefined): Chat | null
 // eine per Drag zurechtgelegte Map Chat-Wechsel, View-Toggles und Reloads
 // überlebt (das Layout-Rebuild setzte sonst jede Verschiebung zurück).
 function positionsKey(rootId: string) {
-  return `flowtalk.mindmap-pos.${rootId}`;
+  return `syflo.mindmap-pos.${rootId}`;
 }
 
 function loadSavedPositions(rootId: string | undefined): Record<string, { x: number; y: number }> {

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "FlowTalk",
+  "productName": "Syflo",
   "version": "0.1.0",
-  "identifier": "app.flowtalk",
+  "identifier": "app.syflo",
   "build": {
     "frontendDist": "../frontend/dist",
     "devUrl": "http://localhost:5173",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "FlowTalk",
+        "title": "Syflo",
         "width": 1280,
         "height": 860,
         "minWidth": 900,

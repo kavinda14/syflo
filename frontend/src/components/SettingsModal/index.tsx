@@ -199,7 +199,7 @@ export function SettingsModal({ open, onClose, onSaved }: Props) {
                 <div className="grid grid-cols-2 gap-2">
                   {(['ollama', 'openai'] as LLMProvider[]).map(p => {
                     const isSelected = provider === p;
-                    // "Currently active" = was gerade tatsächlich von FlowTalk
+                    // "Currently active" = was gerade tatsächlich von Syflo
                     // verwendet wird (zuletzt gespeichert). Kann sich vom
                     // gerade ausgewählten Form-Wert unterscheiden, solange
                     // der User noch nicht "Activate" geklickt hat.

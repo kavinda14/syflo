@@ -86,13 +86,13 @@ describe('getTreePaperContext', () => {
 
 describe('extractPdfText', () => {
   it('extracts text from a real minimal PDF', async () => {
-    // Hand-rolled single-page PDF with Helvetica "Hello FlowTalk paper".
-    const pdf = buildMinimalPdf('Hello FlowTalk paper');
-    const tmp = path.join(os.tmpdir(), `flowtalk-pdftext-${process.pid}.pdf`);
+    // Hand-rolled single-page PDF with Helvetica "Hello Syflo paper".
+    const pdf = buildMinimalPdf('Hello Syflo paper');
+    const tmp = path.join(os.tmpdir(), `syflo-pdftext-${process.pid}.pdf`);
     fs.writeFileSync(tmp, pdf);
     try {
       const text = await extractPdfText(tmp);
-      expect(text).toContain('Hello FlowTalk paper');
+      expect(text).toContain('Hello Syflo paper');
     } finally {
       fs.unlinkSync(tmp);
     }

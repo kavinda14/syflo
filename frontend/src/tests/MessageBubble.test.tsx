@@ -104,7 +104,7 @@ describe('MessageBubble – streaming cursor', () => {
     const { container } = render(
       <MessageBubble message={emptyMsg} isStreaming={true} onWordRightClick={vi.fn()} />
     );
-    // Empty stream → the FlowTalk wave-loop ThinkingIndicator is rendered
+    // Empty stream → the Syflo wave-loop ThinkingIndicator is rendered
     expect(container.querySelector('.ft-thinking-wave')).toBeInTheDocument();
   });
 });

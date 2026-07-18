@@ -159,7 +159,7 @@ describe('PATCH /api/highlights/:hid', () => {
   it('überlebt das Löschen des Branches über die echte Chat-Route (Issue 06)', async () => {
     // Der zentrale "Highlight überlebt den Chat"-Vertrag. Anders als in Syflo
     // testen wir über DELETE /api/chats/:id (den echten Lösch-Pfad), weil
-    // FlowTalk keine SQLite-FKs aktiviert — die Route entkoppelt explizit.
+    // Syflo keine SQLite-FKs aktiviert — die Route entkoppelt explizit.
     db.prepare(
       'INSERT INTO chats (id, title, created_at) VALUES (?, ?, ?)',
     ).run('chat-doomed', 'test', '2026-05-25T00:00:00.000Z');

@@ -6,7 +6,7 @@
  * and POST /api/papers/from-url (download the PDF, bind it to the chat tree,
  * ADR-0002 409 on a tree that already has one). Search backends and the URL
  * fetch are injected via the router's options parameter — no real network.
- * Ported from Syflo's papers.test.js, adapted to FlowTalk's tree binding.
+ * Ported from Syflo's papers.test.js, adapted to Syflo's tree binding.
  */
 process.env.OPENAI_API_KEY = 'test-key-for-unit-tests';
 const express = require('express');

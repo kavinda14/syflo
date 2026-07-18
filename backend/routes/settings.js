@@ -1,7 +1,7 @@
 /**
  * settings.js
  *
- * Globale FlowTalk-Einstellungen: Welcher LLM-Provider wird verwendet,
+ * Globale Syflo-Einstellungen: Welcher LLM-Provider wird verwendet,
  * welches Modell, und (für OpenAI) der API-Key.
  *
  * Wichtig: Der API-Key verlässt das Backend nie. GET liefert nur

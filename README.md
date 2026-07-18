@@ -1,7 +1,7 @@
-# FlowTalk
+# Syflo
 
 A chat app built for **branching research**. Instead of one long linear
-conversation, FlowTalk lets you spin off a side-chat from any word the
+conversation, Syflo lets you spin off a side-chat from any word the
 model writes — creating a tree of focused sub-conversations you can
 navigate visually as a mind map.
 
@@ -10,7 +10,7 @@ no chat data ever leaves your machine.
 
 ---
 
-## Why FlowTalk?
+## Why Syflo?
 
 A normal chat app forces every follow-up question into the same scroll.
 Ask about *quantum mechanics*, get curious about *wavefunction collapse*,
@@ -18,7 +18,7 @@ and now your one chat is half quantum, half wavefunctions, half
 Heisenberg — impossible to revisit, impossible to share with someone
 who only cares about one branch.
 
-FlowTalk treats every curious tangent as its own chat with the parent
+Syflo treats every curious tangent as its own chat with the parent
 as context, and shows the whole tree as a mind map so you can see how
 your thinking branched.
 
@@ -101,8 +101,8 @@ you can branch immediately if the definition raises more questions.
 ## Setup
 
 ```bash
-git clone git@github.com:kavinda14/flowtalk.git
-cd flowtalk
+git clone git@github.com:kavinda14/syflo.git
+cd syflo
 
 # Backend
 cd backend
@@ -142,7 +142,7 @@ the backend on port 3001.
 ## Project layout
 
 ```
-flowtalk/
+syflo/
 ├── backend/
 │   ├── server.js           # Express app factory + listen
 │   ├── database.js         # SQLite setup

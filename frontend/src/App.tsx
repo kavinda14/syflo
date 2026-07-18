@@ -37,6 +37,19 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'chat' | 'mindmap'>('chat');
   const [loadingChat, setLoadingChat] = useState(false);
 
+  // Whether the left sidebar is collapsed to a slim rail. Persisted so the
+  // preference survives reloads.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(
+    () => localStorage.getItem('syflo.sidebarCollapsed') === '1',
+  );
+  const toggleSidebar = () => {
+    setSidebarCollapsed(prev => {
+      const next = !prev;
+      localStorage.setItem('syflo.sidebarCollapsed', next ? '1' : '0');
+      return next;
+    });
+  };
+
   // Active LLM settings — surfaced in the sidebar footer so the user always
   // knows which provider/model is being used (and whose API key is paying).
   const [settings, setSettings] = useState<Settings | null>(null);
@@ -67,7 +80,7 @@ export default function App() {
   const CHAT_PANE_MIN = 300;
   const CHAT_PANE_MAX = 800;
   const [chatPaneWidth, setChatPaneWidth] = useState<number>(() => {
-    const stored = Number(localStorage.getItem('flowtalk.chatPaneWidth'));
+    const stored = Number(localStorage.getItem('syflo.chatPaneWidth'));
     return Number.isFinite(stored) && stored >= CHAT_PANE_MIN && stored <= CHAT_PANE_MAX
       ? stored
       : 340;
@@ -92,7 +105,7 @@ export default function App() {
     const drag = chatPaneResizeRef.current;
     if (!drag) return;
     chatPaneResizeRef.current = null;
-    localStorage.setItem('flowtalk.chatPaneWidth', String(drag.last));
+    localStorage.setItem('syflo.chatPaneWidth', String(drag.last));
   };
 
   // popup: the word the user right-clicked on, plus its screen coordinates
@@ -505,6 +518,8 @@ export default function App() {
         onToggleView={() => setViewMode(v => v === 'chat' ? 'mindmap' : 'chat')}
         settings={settings}
         onSettingsChange={setSettings}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebar}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden">

@@ -1,17 +1,17 @@
 #!/bin/bash
-# FlowTalk Start-Skript
+# Syflo Start-Skript
 # Startet Ollama, Backend und Frontend, öffnet den Browser
 
 set -e
 
-FLOWTALK_DIR="$(cd "$(dirname "$0")" && pwd)"
-SCRIPT_PATH="$FLOWTALK_DIR/start.command"
-LOG_DIR="$FLOWTALK_DIR/logs"
+SYFLO_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_PATH="$SYFLO_DIR/start.command"
+LOG_DIR="$SYFLO_DIR/logs"
 mkdir -p "$LOG_DIR"
 
-cd "$FLOWTALK_DIR"
+cd "$SYFLO_DIR"
 
-echo "🚀 FlowTalk wird gestartet..."
+echo "🚀 Syflo wird gestartet..."
 echo ""
 
 # Rekursiv einen Prozess samt aller Nachfahren beenden.
@@ -30,7 +30,7 @@ kill_tree() {
 # Aufräumen beim Beenden (Ctrl+C, Cmd+W, kill)
 cleanup() {
   echo ""
-  echo "Beende FlowTalk..."
+  echo "Beende Syflo..."
   kill_tree "$BACKEND_PID"
   kill_tree "$FRONTEND_PID"
   kill_tree "$OLLAMA_PID"
@@ -54,7 +54,7 @@ for pid in $(pgrep -f "$SCRIPT_PATH" 2>/dev/null || true); do
   cmd=$(ps -p "$pid" -o command= 2>/dev/null || true)
   case "$cmd" in
     *bash*"$SCRIPT_PATH"*|*sh*"$SCRIPT_PATH"*|"$SCRIPT_PATH"*)
-      [[ "$killed_any" == 0 ]] && echo "Schließe vorherige FlowTalk-Instanzen..."
+      [[ "$killed_any" == 0 ]] && echo "Schließe vorherige Syflo-Instanzen..."
       killed_any=1
       pid_tty=$(ps -p "$pid" -o tty= 2>/dev/null | tr -d ' ' || true)
       kill -TERM "$pid" 2>/dev/null || true
@@ -124,7 +124,7 @@ fi
 
 # 2. Backend
 echo "Starte Backend (Port 3001)..."
-(cd "$FLOWTALK_DIR/backend" && npm run dev) >"$LOG_DIR/backend.log" 2>&1 &
+(cd "$SYFLO_DIR/backend" && npm run dev) >"$LOG_DIR/backend.log" 2>&1 &
 BACKEND_PID=$!
 if wait_for http://localhost:3001/api/chats 20; then
   echo "Backend bereit"
@@ -134,7 +134,7 @@ fi
 
 # 3. Frontend
 echo "Starte Frontend (Port 5173)..."
-(cd "$FLOWTALK_DIR/frontend" && npm run dev) >"$LOG_DIR/frontend.log" 2>&1 &
+(cd "$SYFLO_DIR/frontend" && npm run dev) >"$LOG_DIR/frontend.log" 2>&1 &
 FRONTEND_PID=$!
 if wait_for http://localhost:5173 30; then
   echo "Frontend bereit"
@@ -145,7 +145,7 @@ else
 fi
 
 echo ""
-echo "✅ FlowTalk läuft!"
+echo "✅ Syflo läuft!"
 echo "   Frontend: http://localhost:5173"
 echo "   Backend:  http://localhost:3001"
 echo "   Ollama:   http://localhost:11434"

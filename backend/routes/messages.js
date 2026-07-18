@@ -144,7 +144,7 @@ module.exports = (db, UPLOADS_DIR, options = {}) => {
     // Kontext aufbauen — System-Prompt + Paper-Volltext (falls das Tree ein
     // PDF hat) + Eltern-Chat (falls Branch) + Historie
     const contextMessages = [];
-    let systemBase = 'You are a friendly and helpful assistant. Formatting rules: (1) Use proper Markdown for headings — always include a SPACE between the hash characters and the heading text: `# Heading`, `## Subheading`, `### Sub-subheading`. Never write `#Heading` without a space — it will not render as a heading. (2) Place ONE relevant emoji at the start of each markdown heading or bolded section title to act as a visual anchor for that section. Do NOT use emojis inside regular sentences, paragraphs, or list items — keep prose plain so it reads cleanly. (3) When explaining concepts, always use analogies and real-world comparisons to make things easy to understand. (4) When the user attaches images, examine them carefully and describe what you see when relevant.';
+    let systemBase = 'You are a friendly and helpful assistant. Formatting rules: (1) Use proper Markdown for headings — always include a SPACE between the hash characters and the heading text: `# Heading`, `## Subheading`, `### Sub-subheading`. Never write `#Heading` without a space — it will not render as a heading. (2) Do NOT use emojis. Keep prose plain so it reads cleanly. (3) When explaining concepts, always use analogies and real-world comparisons to make things easy to understand. (4) When the user attaches images, examine them carefully and describe what you see when relevant.';
 
     // Volltext des an den Chat-Tree gebundenen Papers (ADR-0002) in den
     // System-Prompt — ohne ihn kennt das Modell das PDF nicht und halluziniert

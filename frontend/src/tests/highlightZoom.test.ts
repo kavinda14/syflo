@@ -3,7 +3,7 @@
  *
  * Regression test for Syflo's zoom bug (Slice 04): rect positions were
  * normalized by zoom on capture but width/height were NOT, so a highlight
- * was only correctly sized at its creation zoom. FlowTalk normalizes all
+ * was only correctly sized at its creation zoom. Syflo normalizes all
  * four values (normalizeRectsToZoom) and multiplies all four at render
  * time (PdfView overlay styles) — captured at zoom A, a highlight must
  * reproduce the exact client-space geometry at any zoom B.

@@ -1,7 +1,7 @@
 /*
  * index.css
  *
- * Global base styles for FlowTalk. Kept intentionally minimal — almost all
+ * Global base styles for Syflo. Kept intentionally minimal — almost all
  * styling is done with Tailwind utility classes directly in the components.
  * This file only sets things that cannot easily be expressed with Tailwind:
  * - A clean system font stack (Apple-style)

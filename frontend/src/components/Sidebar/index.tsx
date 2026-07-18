@@ -14,7 +14,7 @@
  */
 
 import { useState, useEffect } from 'react';
-import { SquarePen, GitBranch, ArrowLeft, Pencil, Trash2, ChevronDown, FileText } from 'lucide-react';
+import { SquarePen, GitBranch, ArrowLeft, Pencil, Trash2, ChevronDown, FileText, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { ChatTree, RenameInput } from './ChatTree';
 import { Logo } from '../Logo';
 import { SettingsModal } from '../SettingsModal';
@@ -53,9 +53,12 @@ interface Props {
   // user always sees which provider/model is active.
   settings: AppSettings | null;
   onSettingsChange: (s: AppSettings) => void;
+  // Whether the sidebar is collapsed to a slim rail, plus the toggle.
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
 }
 
-export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, onRename, viewMode, onToggleView, settings, onSettingsChange }: Props) {
+export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, onRename, viewMode, onToggleView, settings, onSettingsChange, collapsed, onToggleCollapsed }: Props) {
   const [expandedRootId, setExpandedRootId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -111,12 +114,44 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
     setRenamingId(null);
   };
 
+  // Collapsed rail: a slim strip with only the expand toggle and a new-chat
+  // button, so the chat/PDF area gets the full width. Everything else is
+  // hidden until the user expands the sidebar again.
+  if (collapsed) {
+    return (
+      <div className="w-12 bg-white border-r border-gray-200 flex flex-col items-center py-5 shrink-0">
+        <button
+          onClick={onToggleCollapsed}
+          title="Expand sidebar"
+          className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+        >
+          <PanelLeftOpen size={18} />
+        </button>
+        <button
+          onClick={onNewChat}
+          title="New Chat"
+          className="mt-2 p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+        >
+          <SquarePen size={16} />
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="w-64 bg-white border-r border-gray-200 flex flex-col shrink-0">
       {/* Top bar: app name + action icons */}
       <div className="flex items-center justify-between px-5 py-5 border-b border-gray-100">
         <Logo width={120} />
         <div className="flex items-center gap-2">
+          {/* Collapse the sidebar to a slim rail */}
+          <button
+            onClick={onToggleCollapsed}
+            title="Collapse sidebar"
+            className="p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+          >
+            <PanelLeftClose size={16} />
+          </button>
           {/* Mind map toggle — only meaningful with an active chat, so hide on the
               empty "homepage" state and show as soon as a chat is selected. */}
           {activeChatId && (

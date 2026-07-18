@@ -7,8 +7,8 @@ use tauri::{Manager, RunEvent};
 /// Wrapped in `Mutex<Option<...>>` because the child is taken out at shutdown.
 struct BackendProcess(Mutex<Option<Child>>);
 
-/// Spawns the bundled Node binary running the FlowTalk backend.
-/// `data_dir` is exported as FLOWTALK_DATA_DIR so the backend stores the SQLite
+/// Spawns the bundled Node binary running the Syflo backend.
+/// `data_dir` is exported as SYFLO_DATA_DIR so the backend stores the SQLite
 /// database and uploaded files in a writable per-user location (the .app bundle
 /// is read-only on macOS).
 fn spawn_backend(
@@ -18,7 +18,7 @@ fn spawn_backend(
 ) -> std::io::Result<Child> {
     let mut cmd = Command::new(node_path);
     cmd.arg(server_path)
-        .env("FLOWTALK_DATA_DIR", data_dir)
+        .env("SYFLO_DATA_DIR", data_dir)
         // Backend listens on this port — must match the frontend's expectations.
         .env("PORT", "3001")
         // Inherit stdio so backend logs appear in the Tauri console output.

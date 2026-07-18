@@ -5,10 +5,10 @@ const path = require('path');
 const fs = require('fs');
 const { createDb } = require('./database');
 
-// Same FLOWTALK_DATA_DIR convention as database.js: in the Tauri bundle this
+// Same SYFLO_DATA_DIR convention as database.js: in the Tauri bundle this
 // points to a writable per-user location; in dev (no env var) we fall back to
 // the project's uploads/ folder so existing data keeps working.
-const DATA_DIR = process.env.FLOWTALK_DATA_DIR || path.join(__dirname, '..');
+const DATA_DIR = process.env.SYFLO_DATA_DIR || path.join(__dirname, '..');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -45,7 +45,7 @@ if (require.main === module) {
   const app = createApp(db);
   const PORT = process.env.PORT || 3001;
   app.listen(PORT, () => {
-    console.log(`FlowTalk backend running on http://localhost:${PORT}`);
+    console.log(`Syflo backend running on http://localhost:${PORT}`);
   });
 }
 

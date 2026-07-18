@@ -432,7 +432,7 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                 selection and can be a whole sentence: clamped to two lines,
                 expandable via the chevron (only shown when actually cut). */}
             {chat.parent_word && chat.parent_id && (
-              <div className="flex w-full min-w-0 items-start gap-1.5 border-b border-gray-100 pb-2 text-sm">
+              <div className="flex w-full min-w-0 items-start gap-1.5 border-b border-gray-100 pb-3 mb-6 text-sm">
                 <span className="material-icons mt-0.5 shrink-0 text-[14px] text-gray-400">subdirectory_arrow_left</span>
                 <div
                   ref={branchQuoteRef}
