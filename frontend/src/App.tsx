@@ -61,6 +61,40 @@ export default function App() {
   // Paper-Such-Modal (Slice 07), geöffnet über "Research paper" im Plus-Menü.
   const [paperSearchOpen, setPaperSearchOpen] = useState(false);
 
+  // Width of the right chat column in the three-column PDF layout. The user
+  // drags the divider between PDF and chat to resize; persisted so the
+  // preferred width survives reloads.
+  const CHAT_PANE_MIN = 300;
+  const CHAT_PANE_MAX = 800;
+  const [chatPaneWidth, setChatPaneWidth] = useState<number>(() => {
+    const stored = Number(localStorage.getItem('flowtalk.chatPaneWidth'));
+    return Number.isFinite(stored) && stored >= CHAT_PANE_MIN && stored <= CHAT_PANE_MAX
+      ? stored
+      : 340;
+  });
+  // Live drag state — kept in a ref so pointermove doesn't fight React state.
+  const chatPaneResizeRef = useRef<{ startX: number; startWidth: number; last: number } | null>(null);
+  const handleChatPaneResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    chatPaneResizeRef.current = { startX: e.clientX, startWidth: chatPaneWidth, last: chatPaneWidth };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const handleChatPaneResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = chatPaneResizeRef.current;
+    if (!drag) return;
+    // The chat pane sits at the right window edge, so dragging the divider
+    // left widens it by exactly the pointer delta.
+    const next = Math.min(CHAT_PANE_MAX, Math.max(CHAT_PANE_MIN, drag.startWidth + (drag.startX - e.clientX)));
+    drag.last = next;
+    setChatPaneWidth(next);
+  };
+  const handleChatPaneResizeEnd = () => {
+    const drag = chatPaneResizeRef.current;
+    if (!drag) return;
+    chatPaneResizeRef.current = null;
+    localStorage.setItem('flowtalk.chatPaneWidth', String(drag.last));
+  };
+
   // popup: the word the user right-clicked on, plus its screen coordinates
   const [popup, setPopup] = useState<WordPopup | null>(null);
   const [explanation, setExplanation] = useState('');
@@ -502,12 +536,29 @@ export default function App() {
               }
             />
           )}
+          {/* Divider between PDF and chat — drag to resize the chat column
+              sideways (min 300px, max 800px). Only present in the
+              three-column layout. */}
+          {treePaper && activeChatId && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label="Resize chat column"
+              data-testid="chat-pane-resizer"
+              onPointerDown={handleChatPaneResizeStart}
+              onPointerMove={handleChatPaneResizeMove}
+              onPointerUp={handleChatPaneResizeEnd}
+              onPointerCancel={handleChatPaneResizeEnd}
+              className="w-1.5 shrink-0 cursor-col-resize bg-gray-200 hover:bg-blue-300 active:bg-blue-400 transition-colors"
+            />
+          )}
           <div
             className={
               treePaper && activeChatId
-                ? 'w-[340px] shrink-0 flex overflow-hidden border-l border-gray-200'
+                ? 'shrink-0 flex overflow-hidden border-l border-gray-200'
                 : 'flex-1 flex overflow-hidden'
             }
+            style={treePaper && activeChatId ? { width: chatPaneWidth } : undefined}
             data-testid={treePaper && activeChatId ? 'chat-pane-right' : undefined}
           >
             <ChatArea

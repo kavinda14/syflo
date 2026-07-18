@@ -6,7 +6,7 @@
  */
 
 import { useState, useRef, useEffect, useMemo } from 'react';
-import { Mic, MicOff, Plus, ArrowUp, ChevronDown, Paperclip, FileText, BookOpen } from 'lucide-react';
+import { Mic, MicOff, Plus, ArrowUp, ChevronDown, ChevronUp, Image as ImageIcon, FileText, BookOpen } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
 import { AttachmentChip } from './AttachmentChip';
 import { VoiceWaveform } from './VoiceWaveform';
@@ -64,6 +64,32 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const chatColumnClass = 'shrink-0 px-6 sm:px-8';
   const chatColumnStyle = { width: '46rem', maxWidth: 'calc(100% - 3rem)' };
+
+  // "Branched from"-Zitat: standardmäßig auf 2 Zeilen geklemmt; der Chevron
+  // klappt den vollen Text auf. Der Chevron erscheint nur, wenn das Zitat
+  // wirklich abgeschnitten ist — gemessen per ResizeObserver, damit das auch
+  // beim Verbreitern der Chat-Spalte (Drag-Resize) stimmt.
+  const [branchQuoteExpanded, setBranchQuoteExpanded] = useState(false);
+  const [branchQuoteOverflows, setBranchQuoteOverflows] = useState(false);
+  const branchQuoteRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setBranchQuoteExpanded(false);
+  }, [chat?.id]);
+  useEffect(() => {
+    const el = branchQuoteRef.current;
+    if (!el) return;
+    const measure = () => {
+      // Im aufgeklappten Zustand nicht messen — sonst verschwände der
+      // Chevron und man könnte nie wieder zuklappen.
+      if (!branchQuoteExpanded) {
+        setBranchQuoteOverflows(el.scrollHeight > el.clientHeight + 1);
+      }
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [chat?.id, chat?.parent_word, branchQuoteExpanded]);
 
   // onTranscript wird erst beim Stoppen aufgerufen, mit dem gesammelten Text —
   // wir hängen ihn ans Eingabefeld an (oder schreiben ihn rein, wenn leer).
@@ -378,14 +404,20 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
 
   return (
     <div className="flex-1 flex flex-col bg-white overflow-hidden relative">
-      {/* Header: chat title */}
-      <div className="border-b border-gray-100 bg-white">
-        <div className="flex justify-center">
-          <div className={`${chatColumnClass} py-7`} style={chatColumnStyle} data-testid="chat-header-shell">
-            <h2 className="font-semibold text-gray-900 text-base truncate">{chat.title}</h2>
+      {/* Header: chat title. Bei Branch-Chats entfällt er komplett — der
+          Titel ("About: <Auswahl>") wäre nur eine Dublette des aufklappbaren
+          "Branched from"-Zitats direkt darunter. */}
+      {!(chat.parent_word && chat.parent_id) && (
+        <div className="border-b border-gray-100 bg-white">
+          <div className="flex justify-center">
+            <div className={`${chatColumnClass} py-7`} style={chatColumnStyle} data-testid="chat-header-shell">
+              <h2 className="font-semibold text-gray-900 text-base break-words line-clamp-2" title={chat.title}>
+                {chat.title}
+              </h2>
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Message list */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
@@ -395,17 +427,49 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
             style={chatColumnStyle}
             data-testid="chat-content-shell"
           >
-            {/* Blue hyperlink back to parent chat — shown at the top of branched chats */}
+            {/* Blue hyperlink back to parent chat — shown at the top of
+                branched chats. The quote is the user's original PDF/chat
+                selection and can be a whole sentence: clamped to two lines,
+                expandable via the chevron (only shown when actually cut). */}
             {chat.parent_word && chat.parent_id && (
-              <div className="flex w-full items-center gap-1.5 border-b border-gray-100 pb-2 text-sm">
-                <span className="material-icons text-[14px] text-gray-400">subdirectory_arrow_left</span>
-                <span className="text-gray-400">Branched from </span>
-                <button
-                  onClick={() => onSelectChat(chat.parent_id!)}
-                  className="text-blue-600 underline underline-offset-2 hover:text-blue-800 font-medium transition-colors"
+              <div className="flex w-full min-w-0 items-start gap-1.5 border-b border-gray-100 pb-2 text-sm">
+                <span className="material-icons mt-0.5 shrink-0 text-[14px] text-gray-400">subdirectory_arrow_left</span>
+                <div
+                  ref={branchQuoteRef}
+                  className={`min-w-0 flex-1 break-words leading-relaxed ${branchQuoteExpanded ? '' : 'line-clamp-2'}`}
+                  data-testid="branched-from-quote"
                 >
-                  "{chat.parent_word}"
-                </button>
+                  <span className="text-gray-400">Branched from </span>
+                  {/* Kein <button>: Buttons sind atomare Inline-Blöcke, die
+                      weder über Zeilen umbrechen noch sich clampen lassen —
+                      das Zitat wäre wieder einzeilig abgeschnitten. Ein
+                      inline-<span> mit Link-Semantik bricht sauber um. */}
+                  <span
+                    role="link"
+                    tabIndex={0}
+                    onClick={() => onSelectChat(chat.parent_id!)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        onSelectChat(chat.parent_id!);
+                      }
+                    }}
+                    className="cursor-pointer text-blue-600 underline underline-offset-2 hover:text-blue-800 font-medium transition-colors"
+                  >
+                    "{chat.parent_word}"
+                  </span>
+                </div>
+                {(branchQuoteOverflows || branchQuoteExpanded) && (
+                  <button
+                    onClick={() => setBranchQuoteExpanded(v => !v)}
+                    title={branchQuoteExpanded ? 'Show less' : 'Show full text'}
+                    aria-expanded={branchQuoteExpanded}
+                    data-testid="branched-from-toggle"
+                    className="mt-0.5 shrink-0 rounded p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+                  >
+                    {branchQuoteExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                  </button>
+                )}
               </div>
             )}
 
@@ -460,7 +524,7 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
       {/* Input area — full width */}
       <div className="bg-white pb-6 pt-3 relative">
         <div className="flex justify-center">
-          <div className={chatColumnClass} style={chatColumnStyle} data-testid="chat-input-shell">
+          <div className={`${chatColumnClass} @container`} style={chatColumnStyle} data-testid="chat-input-shell">
             {/* Anhang-Chips über dem Eingabefeld */}
             {attachments.length > 0 && (
               <div className="flex flex-wrap gap-2 mb-2 px-2">
@@ -567,60 +631,74 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                       className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
                       data-testid="attach-menu-files"
                     >
-                      <Paperclip size={16} className="text-gray-500 shrink-0" />
-                      <span>Files and media</span>
+                      <ImageIcon size={16} className="text-gray-500 shrink-0" />
+                      <span>Media</span>
                     </button>
                     {onUploadPdf && (
                       <button
                         role="menuitem"
                         onClick={handlePickPdf}
-                        className="w-full flex items-start gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
+                        className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
                         data-testid="attach-menu-upload-pdf"
                       >
-                        <FileText size={16} className="text-gray-500 shrink-0 mt-0.5" />
-                        <span className="min-w-0">
-                          <span className="block">Upload file</span>
-                          <span className="block text-xs text-gray-400">Attach a PDF from your computer</span>
-                        </span>
+                        <FileText size={16} className="text-gray-500 shrink-0" />
+                        <span>PDF</span>
                       </button>
                     )}
                     {onOpenPaperSearch && (
                       <button
                         role="menuitem"
                         onClick={() => { setPickerMenuOpen(false); onOpenPaperSearch(); }}
-                        className="w-full flex items-start gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
+                        className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 transition-colors text-left text-sm text-gray-800"
                         data-testid="attach-menu-research-paper"
                       >
-                        <BookOpen size={16} className="text-gray-500 shrink-0 mt-0.5" />
-                        <span className="min-w-0">
-                          <span className="block">Research paper</span>
-                          <span className="block text-xs text-gray-400">Search arXiv &amp; OpenAlex and import</span>
-                        </span>
+                        <BookOpen size={16} className="text-gray-500 shrink-0" />
+                        <span>Research paper</span>
                       </button>
                     )}
                   </div>
                 )}
               </div>
 
-              <textarea
-                ref={textareaRef}
-                value={input}
-                onChange={handleInputChange}
-                onKeyDown={handleKeyDown}
-                placeholder={isListening ? '' : 'Ask anything'}
-                rows={1}
-                disabled={isBusy}
-                readOnly={isListening}
-                className="min-h-[44px] flex-1 bg-transparent px-2 py-[10px] text-[16px] text-gray-900 placeholder-gray-400 outline-none resize-none leading-[1.5] disabled:opacity-50"
-                data-testid="chat-textarea"
-              />
+              {/* Der native Textarea-Platzhalter kann in schmalen Spalten
+                  weder umbrechen (sah abgeschnitten aus) noch mit Ellipse
+                  kürzen (Chromium ignoriert text-overflow auf Textarea-
+                  Platzhaltern). Darum bleibt das placeholder-Attribut nur
+                  für Screenreader/Tests, unsichtbar — sichtbar ist das
+                  Overlay-Span, das sauber mit „…" kürzt. */}
+              <div className="relative flex-1 min-w-0 flex">
+                <textarea
+                  ref={textareaRef}
+                  value={input}
+                  onChange={handleInputChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder={isListening ? '' : 'Ask anything'}
+                  rows={1}
+                  disabled={isBusy}
+                  readOnly={isListening}
+                  className="min-h-[44px] w-full min-w-0 bg-transparent px-2 py-[10px] text-[16px] text-gray-900 outline-none resize-none leading-[1.5] disabled:opacity-50 placeholder:text-transparent placeholder:whitespace-nowrap placeholder:overflow-hidden"
+                  data-testid="chat-textarea"
+                />
+                {!input && !isListening && (
+                  <span
+                    aria-hidden="true"
+                    className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 max-w-[calc(100%-1rem)] truncate text-[16px] leading-[1.5] text-gray-400"
+                    data-testid="chat-textarea-placeholder"
+                  >
+                    Ask anything
+                  </span>
+                )}
+              </div>
 
+              {/* In sehr schmalen Spalten (Branch-Chat neben dem PDF) hat das
+                  Mockup keinen Mikro-Knopf — ausblenden, damit der Platzhalter
+                  und die Eingabe genug Breite behalten. */}
               {supported && (
                 <button
                   onClick={handleToggleListening}
                   title={isListening ? 'Aufnahme beenden' : 'Aufnahme starten'}
                   aria-pressed={isListening}
-                  className={`shrink-0 w-9 h-9 flex items-center justify-center rounded-full transition-colors ${
+                  className={`shrink-0 w-9 h-9 @max-[24rem]:hidden flex items-center justify-center rounded-full transition-colors ${
                     isListening
                       ? 'text-white bg-red-500 hover:bg-red-600'
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'

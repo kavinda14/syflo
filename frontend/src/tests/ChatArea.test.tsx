@@ -66,6 +66,49 @@ describe('ChatArea', () => {
     expect(screen.getByText(/quantum/i)).toBeInTheDocument();
   });
 
+  it('hides the title header in branch chats (the branched-from quote carries it)', () => {
+    const childChat = { ...mockChat, parent_word: 'quantum', parent_id: '0' };
+    render(<ChatArea chat={childChat} loading={false} {...defaultProps} />);
+    expect(screen.queryByTestId('chat-header-shell')).not.toBeInTheDocument();
+  });
+
+  it('clamps a long branched-from quote and expands it via the chevron', async () => {
+    // jsdom hat kein Layout — Overflow (scrollHeight > clientHeight) muss
+    // gemockt werden, damit der Chevron erscheint.
+    const scrollSpy = vi
+      .spyOn(HTMLElement.prototype, 'scrollHeight', 'get')
+      .mockReturnValue(60);
+    const clientSpy = vi
+      .spyOn(HTMLElement.prototype, 'clientHeight', 'get')
+      .mockReturnValue(40);
+    try {
+      const longWord =
+        'establishes a new single-model state-of-the-art BLEU score of 41.8 after training for 3.5 days on eight GPUs';
+      const childChat = { ...mockChat, parent_word: longWord, parent_id: '0' };
+      render(<ChatArea chat={childChat} loading={false} {...defaultProps} />);
+
+      // Standardmäßig geklemmt, Chevron sichtbar
+      const quote = screen.getByTestId('branched-from-quote');
+      expect(quote.className).toContain('line-clamp-2');
+      const toggle = await screen.findByTestId('branched-from-toggle');
+
+      // Aufklappen entfernt das Clamp, Zuklappen bringt es zurück
+      fireEvent.click(toggle);
+      expect(screen.getByTestId('branched-from-quote').className).not.toContain('line-clamp-2');
+      fireEvent.click(screen.getByTestId('branched-from-toggle'));
+      expect(screen.getByTestId('branched-from-quote').className).toContain('line-clamp-2');
+    } finally {
+      scrollSpy.mockRestore();
+      clientSpy.mockRestore();
+    }
+  });
+
+  it('shows no chevron when the branched-from quote fits', () => {
+    const childChat = { ...mockChat, parent_word: 'quantum', parent_id: '0' };
+    render(<ChatArea chat={childChat} loading={false} {...defaultProps} />);
+    expect(screen.queryByTestId('branched-from-toggle')).not.toBeInTheDocument();
+  });
+
   it('uses the same spacing between all message bubbles', () => {
     const chatWithGroupedMessages: ChatDetail = {
       ...mockChat,
@@ -107,10 +150,10 @@ describe('ChatArea', () => {
       expect(screen.queryByTestId('attach-menu')).not.toBeInTheDocument();
       fireEvent.click(screen.getByTestId('attach-plus-button'));
       expect(screen.getByTestId('attach-menu')).toBeInTheDocument();
-      expect(screen.getByTestId('attach-menu-files')).toHaveTextContent(/Files and media/i);
+      expect(screen.getByTestId('attach-menu-files')).toHaveTextContent(/Media/i);
     });
 
-    it('schließt das Menü, wenn man "Files and media" auswählt', () => {
+    it('schließt das Menü, wenn man "Media" auswählt', () => {
       render(<ChatArea chat={mockChat} loading={false} {...defaultProps} />);
       fireEvent.click(screen.getByTestId('attach-plus-button'));
       fireEvent.click(screen.getByTestId('attach-menu-files'));
@@ -129,7 +172,7 @@ describe('ChatArea', () => {
       const onUploadPdf = vi.fn();
       render(<ChatArea chat={mockChat} loading={false} {...defaultProps} onUploadPdf={onUploadPdf} />);
       fireEvent.click(screen.getByTestId('attach-plus-button'));
-      expect(screen.getByTestId('attach-menu-upload-pdf')).toHaveTextContent(/Upload file/i);
+      expect(screen.getByTestId('attach-menu-upload-pdf')).toHaveTextContent(/PDF/i);
 
       fireEvent.click(screen.getByTestId('attach-menu-upload-pdf'));
       // Menü schließt sich; das versteckte PDF-Input nimmt die Datei entgegen.

@@ -311,6 +311,7 @@ describe('POST /api/papers/from-url', () => {
 
     expect(res.status).toBe(422);
     expect(res.body.error).toBe('not-a-paper');
+    expect(res.body.message).toMatch(/doesn.t lead to a research paper/i);
   });
 
   it('meldet Publisher-Block (502) mit Handlungsanleitung bei akademischen Signalen', async () => {

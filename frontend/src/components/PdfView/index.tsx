@@ -161,23 +161,58 @@ export function PdfView({
       const pageRect = wrapper.getBoundingClientRect();
       const rects: HighlightRect[] = normalizeRectsToZoom(tight.lines, pageRect, zoom);
       setTransientSelection(rects.length > 0 ? { pageNumber, rects } : null);
+      // The constrain above re-adds the range, firing a selectionchange whose
+      // rAF update recomputes the same rects — harmless double work, but it
+      // keeps the overlay consistent when the mouseup landed off-page.
     };
     container.addEventListener('mouseup', onMouseUp);
     return () => container.removeEventListener('mouseup', onMouseUp);
   }, [doc, zoom]);
 
-  // Clear the transient overlay when the user collapses the selection.
+  // Live transient overlay while the user drags: the native selection paint
+  // is suppressed entirely (index.css — pdf.js font boxes are wider and
+  // taller than the canvas glyphs, so the browser's own rectangles covered
+  // empty margin space and neighboring lines). Instead, recompute the tight
+  // per-line rects on every selectionchange, throttled to one update per
+  // animation frame. Also clears the overlay when the selection collapses.
   useEffect(() => {
-    const onSelChange = () => {
-      if (isConstrainingRef.current) return;
+    let raf = 0;
+    const update = () => {
+      raf = 0;
       const sel = window.getSelection?.();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
         setTransientSelection(null);
+        return;
       }
+      // Only react to selections anchored inside one of OUR text layers.
+      const anchorEl =
+        sel.anchorNode?.nodeType === Node.ELEMENT_NODE
+          ? (sel.anchorNode as HTMLElement)
+          : sel.anchorNode?.parentElement ?? null;
+      const layer = anchorEl?.closest?.('.textLayer');
+      if (!layer || !containerRef.current?.contains(layer)) return;
+      const tight = computeTightLineRects();
+      const wrapper = findPageWrapper(sel.anchorNode);
+      if (!tight || !wrapper) {
+        setTransientSelection(null);
+        return;
+      }
+      const pageNumber = pageNumberOf(wrapper);
+      if (!pageNumber) return;
+      const pageRect = wrapper.getBoundingClientRect();
+      const rects = normalizeRectsToZoom(tight.lines, pageRect, zoom);
+      setTransientSelection(rects.length > 0 ? { pageNumber, rects } : null);
+    };
+    const onSelChange = () => {
+      if (isConstrainingRef.current) return;
+      if (!raf) raf = requestAnimationFrame(update);
     };
     document.addEventListener('selectionchange', onSelChange);
-    return () => document.removeEventListener('selectionchange', onSelChange);
-  }, []);
+    return () => {
+      document.removeEventListener('selectionchange', onSelChange);
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [zoom]);
 
   // Multi-rect highlight capture at right-click time. Positions AND sizes
   // are normalized to zoom=1 (the zoom-safe fix) so the highlight renders

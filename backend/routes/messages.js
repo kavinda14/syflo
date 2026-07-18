@@ -17,10 +17,13 @@ const fs = require('fs');
 const multer = require('multer');
 const { getLLMClient } = require('../llm');
 const { streamWithTools } = require('../tools');
+const { getTreePaperContext } = require('../pdf-text');
 
 const MAX_TEXT_FILE_BYTES = 64 * 1024;
 
-module.exports = (db, UPLOADS_DIR) => {
+module.exports = (db, UPLOADS_DIR, options = {}) => {
+  // Injectable for tests: (pdfPath) => Promise<string>.
+  const extractPdfTextFn = options.extractPdfTextFn;
   const router = express.Router({ mergeParams: true });
 
   // Anhänge ins chat-spezifische Verzeichnis legen, damit man pro Chat
@@ -138,9 +141,25 @@ module.exports = (db, UPLOADS_DIR) => {
       }
     }
 
-    // Kontext aufbauen — System-Prompt + Eltern-Chat (falls Branch) + Historie
+    // Kontext aufbauen — System-Prompt + Paper-Volltext (falls das Tree ein
+    // PDF hat) + Eltern-Chat (falls Branch) + Historie
     const contextMessages = [];
-    const systemBase = 'You are a friendly and helpful assistant. Formatting rules: (1) Use proper Markdown for headings — always include a SPACE between the hash characters and the heading text: `# Heading`, `## Subheading`, `### Sub-subheading`. Never write `#Heading` without a space — it will not render as a heading. (2) Place ONE relevant emoji at the start of each markdown heading or bolded section title to act as a visual anchor for that section. Do NOT use emojis inside regular sentences, paragraphs, or list items — keep prose plain so it reads cleanly. (3) When explaining concepts, always use analogies and real-world comparisons to make things easy to understand. (4) When the user attaches images, examine them carefully and describe what you see when relevant.';
+    let systemBase = 'You are a friendly and helpful assistant. Formatting rules: (1) Use proper Markdown for headings — always include a SPACE between the hash characters and the heading text: `# Heading`, `## Subheading`, `### Sub-subheading`. Never write `#Heading` without a space — it will not render as a heading. (2) Place ONE relevant emoji at the start of each markdown heading or bolded section title to act as a visual anchor for that section. Do NOT use emojis inside regular sentences, paragraphs, or list items — keep prose plain so it reads cleanly. (3) When explaining concepts, always use analogies and real-world comparisons to make things easy to understand. (4) When the user attaches images, examine them carefully and describe what you see when relevant.';
+
+    // Volltext des an den Chat-Tree gebundenen Papers (ADR-0002) in den
+    // System-Prompt — ohne ihn kennt das Modell das PDF nicht und halluziniert
+    // Zusammenfassungen. Extraktion ist lazy und in papers.extracted_text
+    // gecacht; Fehler degradieren still zu "kein Paper-Kontext".
+    const paperContext = await getTreePaperContext(db, req.params.chatId, extractPdfTextFn);
+    if (paperContext) {
+      systemBase +=
+        `\n\nA research paper is attached to this conversation: "${paperContext.title}". ` +
+        'Its full text is included below. Base every answer about the paper on this text; ' +
+        'if something is not covered by it, say so instead of guessing.\n' +
+        '--- PAPER TEXT START ---\n' +
+        paperContext.text +
+        '\n--- PAPER TEXT END ---';
+    }
 
     if (chat.parent_id) {
       const parentMessages = db.prepare(

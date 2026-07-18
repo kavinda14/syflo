@@ -174,7 +174,9 @@ export const api = {
     }
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      throw new Error(body.error || 'Failed to import paper');
+      // `message` ist die menschenlesbare Meldung des Backends; `error` ist
+      // je nach Fehlerfall Maschinen-Code oder bereits ausformulierter Text.
+      throw new Error(body.message || body.error || 'Failed to import paper');
     }
     return res.json();
   },

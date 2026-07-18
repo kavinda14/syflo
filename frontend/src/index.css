@@ -36,6 +36,19 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/*
+ * PDF text layer: suppress the native selection paint. pdf.js positions one
+ * absolutely-placed span per visual line with a font box that is both wider
+ * (approximate scaleX) and taller (leading) than the canvas glyphs, so the
+ * browser's own selection rectangles cover empty margin space and bleed into
+ * neighboring lines. PdfView draws its own tight per-line overlay instead
+ * (live during the drag via selectionchange, exact on mouseup).
+ */
+.textLayer ::selection,
+.textLayer::selection {
+  background: transparent;
+}
+
 /* Thin scrollbar — keeps the UI clean without hiding the scrollbar entirely */
 ::-webkit-scrollbar {
   width: 6px;

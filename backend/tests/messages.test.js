@@ -204,3 +204,78 @@ describe('POST /api/chats/:chatId/messages – parent context', () => {
     expect(systemMessage.content).toContain('Parent question');
   });
 });
+
+// ─── Paper context ───────────────────────────────────────────────────────────
+
+describe('POST /api/chats/:chatId/messages – paper context', () => {
+  // App with an injected fake PDF-text extractor (no real pdf.js in this suite).
+  function appWithExtractor(extractFn) {
+    return createApp(db, { messages: { extractPdfTextFn: extractFn } });
+  }
+
+  function bindPaperToChat(chatId) {
+    db.prepare(
+      'INSERT INTO papers (id, title, uploaded_at, pdf_path, status) VALUES (?, ?, ?, ?, ?)',
+    ).run('paper-1', 'Attention Is All You Need', new Date().toISOString(), '/fake/paper.pdf', 'ready');
+    db.prepare('UPDATE chats SET paper_id = ? WHERE id = ?').run('paper-1', chatId);
+  }
+
+  it('includes the attached paper text in the system prompt', async () => {
+    const paperApp = appWithExtractor(jest.fn().mockResolvedValue('THE TRANSFORMER PAPER FULL TEXT'));
+    const chat = await request(paperApp).post('/api/chats').send({ title: 'Paper Chat' });
+    bindPaperToChat(chat.body.id);
+
+    mockCreate.mockResolvedValueOnce(makeStream(['Summary…']));
+    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: 'Paper Title' } }] });
+
+    await request(paperApp)
+      .post(`/api/chats/${chat.body.id}/messages`)
+      .send({ content: 'give me a summary' })
+      .buffer(true);
+
+    const systemMessage = mockCreate.mock.calls[0][0].messages.find(m => m.role === 'system');
+    expect(systemMessage.content).toContain('Attention Is All You Need');
+    expect(systemMessage.content).toContain('THE TRANSFORMER PAPER FULL TEXT');
+  });
+
+  it('branch chats inherit the tree paper context', async () => {
+    const paperApp = appWithExtractor(jest.fn().mockResolvedValue('ROOT PAPER TEXT'));
+    const root = await request(paperApp).post('/api/chats').send({ title: 'Root' });
+    bindPaperToChat(root.body.id);
+    const child = await request(paperApp).post('/api/chats').send({
+      title: 'Child',
+      parent_id: root.body.id,
+      parent_word: 'attention',
+    });
+
+    mockCreate.mockResolvedValueOnce(makeStream(['Reply']));
+    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: 'T' } }] });
+
+    await request(paperApp)
+      .post(`/api/chats/${child.body.id}/messages`)
+      .send({ content: 'what does the paper say?' })
+      .buffer(true);
+
+    const systemMessage = mockCreate.mock.calls[0][0].messages.find(m => m.role === 'system');
+    expect(systemMessage.content).toContain('ROOT PAPER TEXT');
+  });
+
+  it('degrades to a normal chat when extraction fails', async () => {
+    const paperApp = appWithExtractor(jest.fn().mockRejectedValue(new Error('corrupt')));
+    const chat = await request(paperApp).post('/api/chats').send({ title: 'Broken PDF' });
+    bindPaperToChat(chat.body.id);
+
+    mockCreate.mockResolvedValueOnce(makeStream(['Still works']));
+    mockCreate.mockResolvedValueOnce({ choices: [{ message: { content: 'T' } }] });
+
+    const res = await request(paperApp)
+      .post(`/api/chats/${chat.body.id}/messages`)
+      .send({ content: 'hello' })
+      .buffer(true);
+
+    const events = parseSSE(res.text);
+    expect(events.filter(e => e.delta).map(e => e.delta)).toEqual(['Still works']);
+    const systemMessage = mockCreate.mock.calls[0][0].messages.find(m => m.role === 'system');
+    expect(systemMessage.content).not.toContain('PAPER TEXT START');
+  });
+});

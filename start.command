@@ -110,7 +110,10 @@ else
     exit 1
   fi
   echo "Starte Ollama..."
-  ollama serve >"$LOG_DIR/ollama.log" 2>&1 &
+  # 16k Kontextfenster statt der 4096-Default: der Chat bekommt den Volltext
+  # des angehängten Papers (bis ~40k Zeichen ≈ 10k Tokens) in den System-
+  # Prompt — mit 4096 würde Ollama den Paper-Text stillschweigend abschneiden.
+  OLLAMA_CONTEXT_LENGTH=16384 ollama serve >"$LOG_DIR/ollama.log" 2>&1 &
   OLLAMA_PID=$!
   if wait_for http://localhost:11434/api/tags 20; then
     echo "Ollama bereit"

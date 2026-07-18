@@ -62,6 +62,10 @@ function getNodeIntersection(innerNode: InternalNode, outerNode: InternalNode) {
 function FloatingEdge({ id, source, target, markerEnd, style, label, labelStyle }: EdgeProps) {
   const sourceNode = useInternalNode(source);
   const targetNode = useInternalNode(target);
+  // Kompakt vs. voll: Labels sind oft ganze markierte Sätze. Zusammengeklappt
+  // (eine Zeile, Ellipse) kollidieren sie nicht; beim Hover klappt das Label
+  // mehrzeilig auf — gleiche Geste wie die Knoten-Vorschau.
+  const [hovered, setHovered] = useState(false);
 
   if (!sourceNode || !targetNode) return null;
 
@@ -82,6 +86,9 @@ function FloatingEdge({ id, source, target, markerEnd, style, label, labelStyle 
         <EdgeLabelRenderer>
           <div
             className="nodrag nopan"
+            data-testid="mindmap-edge-label"
+            onMouseEnter={() => setHovered(true)}
+            onMouseLeave={() => setHovered(false)}
             style={{
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
@@ -89,6 +96,25 @@ function FloatingEdge({ id, source, target, markerEnd, style, label, labelStyle 
               padding: '2px 6px',
               borderRadius: '4px',
               pointerEvents: 'all',
+              // Branch words can be whole selected sentences from a PDF.
+              // Without a cap the label renders as one enormous unwrapped
+              // line that collides with every node it crosses. Collapsed:
+              // one clipped line. Hovered: the full text, wrapped, floating
+              // above nodes and other labels.
+              ...(hovered
+                ? {
+                    maxWidth: 280,
+                    whiteSpace: 'normal',
+                    overflowWrap: 'break-word',
+                    zIndex: 1000,
+                    boxShadow: '0 4px 14px rgba(0,0,0,0.18)',
+                  }
+                : {
+                    maxWidth: 180,
+                    whiteSpace: 'nowrap',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                  }),
               ...(labelStyle as React.CSSProperties),
             }}
           >
@@ -354,22 +380,59 @@ function findRoot(chats: Chat[], chatId: string | null | undefined): Chat | null
   return null;
 }
 
+// Manuell verschobene Knoten-Positionen, pro Baum in localStorage — damit
+// eine per Drag zurechtgelegte Map Chat-Wechsel, View-Toggles und Reloads
+// überlebt (das Layout-Rebuild setzte sonst jede Verschiebung zurück).
+function positionsKey(rootId: string) {
+  return `flowtalk.mindmap-pos.${rootId}`;
+}
+
+function loadSavedPositions(rootId: string | undefined): Record<string, { x: number; y: number }> {
+  if (!rootId) return {};
+  try {
+    return JSON.parse(localStorage.getItem(positionsKey(rootId)) || '{}');
+  } catch {
+    return {};
+  }
+}
+
 export function MindMap({ chats, activeChatId, onSelect }: Props) {
   // Only show the tree of the currently active chat's root.
   const activeTree = useMemo(() => {
     const root = findRoot(chats, activeChatId);
     return root ? [root] : chats.slice(0, 1); // fallback: first root
   }, [chats, activeChatId]);
+  const rootId = activeTree[0]?.id;
+
+  // Radiales Layout, überlagert mit den gespeicherten manuellen Positionen.
+  const applySaved = (n: Node[]): Node[] => {
+    const saved = loadSavedPositions(rootId);
+    return n.map(node => (saved[node.id] ? { ...node, position: saved[node.id] } : node));
+  };
 
   const { nodes: initialNodes, edges: initialEdges } = useMemo(() => buildLayout(activeTree), [activeTree]);
-  const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState(applySaved(initialNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   useEffect(() => {
     const { nodes: n, edges: e } = buildLayout(activeTree);
-    setNodes(n);
+    setNodes(applySaved(n));
     setEdges(e);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTree]);
+
+  // Nach jedem Drag die neue Position merken.
+  const handleNodeDragStop = (_: unknown, node: Node) => {
+    if (!rootId) return;
+    const saved = loadSavedPositions(rootId);
+    saved[node.id] = { x: node.position.x, y: node.position.y };
+    try {
+      localStorage.setItem(positionsKey(rootId), JSON.stringify(saved));
+    } catch {
+      // localStorage voll/gesperrt — Verschieben funktioniert trotzdem,
+      // nur eben nicht über Reloads hinweg.
+    }
+  };
 
   if (chats.length === 0) {
     return (
@@ -389,6 +452,7 @@ export function MindMap({ chats, activeChatId, onSelect }: Props) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={(_, node) => onSelect(node.id)}
+        onNodeDragStop={handleNodeDragStop}
         fitView
         fitViewOptions={{ padding: 0.3 }}
       >

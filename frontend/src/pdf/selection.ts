@@ -204,7 +204,17 @@ export function computeTightLineRects(): { textLayer: HTMLElement; lines: DOMRec
     }),
   );
 
-  // Filter 2: trim each rect's right edge to where the actual canvas text
+  // Filter 2: consolidate the raw rects into exactly one rect per visual
+  // line. Chrome's range.getClientRects() returns BOTH the element rect and
+  // the text rect for fully-selected spans (near-duplicates of the same
+  // line), and the rect height (font box) exceeds the PDF's line leading, so
+  // consecutive lines overlap by a few pixels — with the multiply-blended
+  // overlay every overlap renders as a dark double-tinted band.
+  const consolidated = consolidateLineRects(columnAware).map(
+    (r) => new DOMRect(r.left, r.top, r.width, r.height),
+  );
+
+  // Filter 3: trim each rect's right edge to where the actual canvas text
   // ends. PDF.js sizes text-layer spans with a fallback sans-serif font +
   // approximate scaleX, which on single-column papers can end up 150–200 px
   // wider than the canvas-rendered glyph run — the user sees the highlight
@@ -213,7 +223,7 @@ export function computeTightLineRects(): { textLayer: HTMLElement; lines: DOMRec
   // rect.right to that. O(rect.width) per rect, only runs on mouseup —
   // well within budget.
   const lines: DOMRect[] = [];
-  for (const lr of columnAware) {
+  for (const lr of consolidated) {
     lines.push(tightenRectToCanvasText(lr, textLayer));
   }
 
@@ -476,6 +486,89 @@ export interface ClientRectLike {
   bottom: number;
   width: number;
   height: number;
+}
+
+/**
+ * Consolidate raw selection rects into exactly one tidy rect per visual line.
+ *
+ * Fixes three artifacts of Chrome's range.getClientRects() that made saved
+ * highlights look broken (overlapping double-dark bands, stray tall blocks):
+ *
+ *   1. Container rects: a rect spanning multiple lines (the element box of a
+ *      fully-selected multi-line span) is dropped when it is much taller than
+ *      the median rect and vertically contains the centers of ≥2 other rects.
+ *   2. Same-line duplicates: rects whose vertical overlap is >50% of the
+ *      smaller height (element box + text box of the same line) are merged
+ *      into their union.
+ *   3. Inter-line bleed: the font box is taller than the PDF's line leading,
+ *      so consecutive line rects overlap by a few pixels; with multiply
+ *      blending every overlap renders darker. Consecutive rects are trimmed
+ *      to meet at the midpoint of their overlap.
+ *
+ * Pure math on ClientRectLike so it can be unit-tested without a DOM.
+ */
+export function consolidateLineRects(
+  rects: readonly ClientRectLike[],
+): Array<{ left: number; top: number; width: number; height: number }> {
+  if (rects.length === 0) return [];
+  const rs = rects.map((r) => ({
+    left: r.left,
+    top: r.top,
+    right: r.left + r.width,
+    bottom: r.top + r.height,
+  }));
+
+  // 1. Drop multi-line container rects.
+  const heights = rs.map((r) => r.bottom - r.top).sort((a, b) => a - b);
+  const median = heights[Math.floor(heights.length / 2)];
+  const singles = rs.filter((r) => {
+    if (r.bottom - r.top <= median * 1.7) return true;
+    let contained = 0;
+    for (const o of rs) {
+      if (o === r) continue;
+      const cy = (o.top + o.bottom) / 2;
+      if (cy > r.top && cy < r.bottom) contained += 1;
+      if (contained >= 2) return false;
+    }
+    return true;
+  });
+
+  // 2. Cluster into visual lines (vertical overlap >50% of the smaller
+  //    height ⇒ same line) and merge each cluster into its union. Adjacent
+  //    PDF lines only overlap by the font-box bleed (~25–30%), so they stay
+  //    separate clusters.
+  singles.sort((a, b) => a.top - b.top || a.left - b.left);
+  const lines: Array<{ left: number; top: number; right: number; bottom: number }> = [];
+  for (const r of singles) {
+    const line = lines.find((l) => {
+      const overlap = Math.min(l.bottom, r.bottom) - Math.max(l.top, r.top);
+      return overlap > 0.5 * Math.min(r.bottom - r.top, l.bottom - l.top);
+    });
+    if (line) {
+      line.left = Math.min(line.left, r.left);
+      line.top = Math.min(line.top, r.top);
+      line.right = Math.max(line.right, r.right);
+      line.bottom = Math.max(line.bottom, r.bottom);
+    } else {
+      lines.push({ ...r });
+    }
+  }
+
+  // 3. Trim vertical bleed between consecutive lines at the midpoint.
+  lines.sort((a, b) => a.top - b.top);
+  for (let i = 1; i < lines.length; i += 1) {
+    const prev = lines[i - 1];
+    const cur = lines[i];
+    if (prev.bottom > cur.top) {
+      const mid = (cur.top + prev.bottom) / 2;
+      prev.bottom = mid;
+      cur.top = mid;
+    }
+  }
+
+  return lines
+    .filter((l) => l.right > l.left && l.bottom > l.top)
+    .map((l) => ({ left: l.left, top: l.top, width: l.right - l.left, height: l.bottom - l.top }));
 }
 
 /**

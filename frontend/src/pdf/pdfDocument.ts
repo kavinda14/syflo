@@ -51,10 +51,10 @@ export async function loadPdfDocument(url: string): Promise<PdfDocumentHandle> {
         canvas.height = Math.floor(viewport.height * dpr);
         canvas.style.width = `${Math.floor(viewport.width)}px`;
         canvas.style.height = `${Math.floor(viewport.height)}px`;
-        const canvasContext = canvas.getContext('2d');
-        if (!canvasContext) return;
+        // pdf.js v6: render() nimmt das Canvas selbst entgegen (RenderParameters
+        // verlangt `canvas`; das alte `canvasContext` allein ist ein Typfehler).
         await page.render({
-          canvasContext,
+          canvas,
           viewport,
           transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
         }).promise;
@@ -70,6 +70,20 @@ export async function loadPdfDocument(url: string): Promise<PdfDocumentHandle> {
       // Setting this incorrectly is the classic cause of "selection highlight
       // is offset from the text" — it has to match the viewport scale exactly.
       container.style.setProperty('--scale-factor', String(scale));
+      // The span font-size rule is `calc(var(--text-scale-factor) *
+      // var(--font-height))`, and --text-scale-factor chains up to
+      // --total-scale-factor — which pdf_viewer.css only defines under
+      // `.pdfViewer .page` (the full viewer widget). Our standalone layer has
+      // no such ancestor, so without these the calc() is invalid, every span
+      // falls back to the inherited 16px font, and each span's box is taller
+      // and wider than its canvas line (the root cause of highlights bleeding
+      // into the next line and into the right margin).
+      container.style.setProperty('--total-scale-factor', String(scale));
+      container.style.setProperty('--user-unit', '1');
+      // Used by the round() expression TextLayer.render() writes into the
+      // layer's inline width/height.
+      container.style.setProperty('--scale-round-x', '1px');
+      container.style.setProperty('--scale-round-y', '1px');
       container.style.width = `${Math.floor(viewport.width)}px`;
       container.style.height = `${Math.floor(viewport.height)}px`;
       const textContent = await page.getTextContent();

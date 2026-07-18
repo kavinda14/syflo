@@ -12,7 +12,7 @@ const DATA_DIR = process.env.FLOWTALK_DATA_DIR || path.join(__dirname, '..');
 const UPLOADS_DIR = path.join(DATA_DIR, 'uploads');
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
-function createApp(db) {
+function createApp(db, options = {}) {
   const app = express();
   app.use(cors());
   app.use(express.json());
@@ -22,7 +22,8 @@ function createApp(db) {
   app.use('/uploads', express.static(UPLOADS_DIR));
 
   app.use('/api/chats', require('./routes/chats')(db));
-  app.use('/api/chats/:chatId/messages', require('./routes/messages')(db, UPLOADS_DIR));
+  // options.messages: z. B. { extractPdfTextFn } — injizierbar für Tests.
+  app.use('/api/chats/:chatId/messages', require('./routes/messages')(db, UPLOADS_DIR, options.messages));
   app.use('/api/explain', require('./routes/explain')(db));
   app.use('/api/papers', require('./routes/papers')(db, UPLOADS_DIR));
   // Highlights + Labels: Pfade wie /api/papers/:id/highlights und

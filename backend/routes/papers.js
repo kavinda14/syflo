@@ -83,6 +83,31 @@ function extractSearchResultsArray(settled) {
   return null;
 }
 
+// OpenAlex display_names occasionally carry publisher markup ("<i>WMAP</i>")
+// and escaped entities ("Wide &amp; Deep") — the modal renders titles as plain
+// text, so strip tags and decode entities before merging (also keeps the
+// dedup keys comparable with arXiv's plain-text titles).
+function stripHtmlFromTitle(title) {
+  if (!title || typeof title !== 'string') return title;
+  return title
+    .replace(/<[^>]*>/g, '')
+    .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#?apos;/g, "'")
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function sanitizeSearchResult(r) {
+  if (!r || typeof r !== 'object') return r;
+  return { ...r, title: stripHtmlFromTitle(r.title) };
+}
+
 // Reduce a search result to a stable comparison key: lowercased, punctuation
 // stripped, multi-space collapsed — arXiv occasionally hyphenates/colonifies
 // titles differently from journal copies.
@@ -259,14 +284,22 @@ module.exports = (db, uploadsDir, options = {}) => {
       }
       try {
         const out = await ssSearchFn(q, 8);
-        if (Array.isArray(out)) return res.json({ results: out, rate_limited: false });
+        if (Array.isArray(out)) {
+          return res.json({ results: out.map(sanitizeSearchResult), rate_limited: false });
+        }
+        if (out && Array.isArray(out.results)) {
+          return res.json({ ...out, results: out.results.map(sanitizeSearchResult) });
+        }
         return res.json(out);
       } catch (ssErr) {
         return next(ssErr);
       }
     }
 
-    const merged = mergeSearchResults(oaList || [], arxivList || []);
+    const merged = mergeSearchResults(
+      (oaList || []).map(sanitizeSearchResult),
+      (arxivList || []).map(sanitizeSearchResult),
+    );
     return res.json({ results: merged, rate_limited: false });
   });
 
@@ -384,7 +417,13 @@ module.exports = (db, uploadsDir, options = {}) => {
           (a) => a.academicHtml || (a.resolvedPdfUrl && typeof a.resolvedPdfUrl === 'string'),
         ) || candidates.some(urlLooksLikePaperIntent);
       if (!hasAcademicSignal) {
-        return res.status(422).json({ error: 'not-a-paper' });
+        // `error` bleibt der stabile Maschinen-Code (Tests + API-Verträge);
+        // `message` ist die Meldung, die das Modal dem User anzeigt.
+        return res.status(422).json({
+          error: 'not-a-paper',
+          message:
+            'This link doesn’t lead to a research paper PDF. Open the paper page in your browser, save the PDF, then attach it via "Upload file".',
+        });
       }
 
       const last = attempts[attempts.length - 1];
@@ -460,5 +499,6 @@ module.exports = (db, uploadsDir, options = {}) => {
 // Helfer-Exporte für Unit-Tests (gleiches Muster wie in Syflo).
 module.exports.mergeSearchResults = mergeSearchResults;
 module.exports.normalizeTitleKey = normalizeTitleKey;
+module.exports.stripHtmlFromTitle = stripHtmlFromTitle;
 module.exports.extractSearchResultsArray = extractSearchResultsArray;
 module.exports.normalizeUrl = normalizeUrl;

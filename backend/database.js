@@ -134,6 +134,14 @@ function createDb(dbPath = DB_PATH) {
     db.exec('ALTER TABLE chats ADD COLUMN paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL');
   }
 
+  // Migration: papers.extracted_text — lazily filled plain-text cache of the
+  // PDF, fed into the chat context so the model can answer questions about
+  // the paper (see pdf-text.js).
+  const papersCols = db.prepare('PRAGMA table_info(papers)').all();
+  if (!papersCols.some((c) => c.name === 'extracted_text')) {
+    db.exec('ALTER TABLE papers ADD COLUMN extracted_text TEXT');
+  }
+
   return db;
 }
 
