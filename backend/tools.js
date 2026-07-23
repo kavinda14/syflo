@@ -15,7 +15,9 @@
  *   4. Loop bis finish_reason === 'stop'
  */
 
-const SEARXNG_URL = process.env.SEARXNG_URL || 'http://localhost:8888';
+// Port 8890 statt SearXNGs üblichem 8888 — 8888 ist auf Entwickler-Macs oft
+// von Jupyter belegt (genau daran ist die Suche hier still gestorben).
+const SEARXNG_URL = process.env.SEARXNG_URL || 'http://localhost:8890';
 
 // Tool-Definition im OpenAI-Function-Calling-Format. Auch Ollama-Llama-3.1+
 // versteht dieses Schema (via OpenAI-kompatiblem Endpoint).
@@ -106,13 +108,55 @@ function mergeToolCallDeltas(accumulator, deltas) {
  *
  * Returns the final assistant text once finish_reason becomes 'stop'.
  */
-async function streamWithTools({ client, model, messages, onText, onToolEvent }) {
+function isAbortError(err) {
+  return err?.name === 'AbortError' || err?.name === 'APIUserAbortError' || /abort/i.test(err?.message || '');
+}
+
+async function streamWithTools({ client, model, messages, onText, onToolEvent, onThinking, onReasoning, onPerf, extras = {}, signal }) {
   // Defensive: keep messages in a local array we can append to across rounds.
   const convo = [...messages];
   // Most realistic queries should resolve in 1-2 tool calls. Bail at 5 to
   // guarantee we never get stuck in an infinite tool-calling loop if the
   // model goes haywire.
   const MAX_ROUNDS = 5;
+
+  // Latenz-Messung über alle Runden hinweg: Zeit bis zum ersten Token
+  // (= Prefill/Prompt-Verarbeitung, der teure Teil bei großen Papern) und
+  // Token-Zähler aus den usage-Chunks (stream_options.include_usage).
+  const startedAt = Date.now();
+  let firstTokenAt = null;
+  let promptTokens = null;
+  let completionTokens = 0;
+
+  // usage-Chunks kommen als letzter Chunk mit leerem choices-Array. Bei
+  // mehreren Tool-Runden ist der Prompt der letzten Runde der längste —
+  // fürs Kontextfenster zählt das Maximum; generierte Tokens summieren sich.
+  const trackUsage = (chunk) => {
+    if (!chunk.usage) return;
+    if (typeof chunk.usage.prompt_tokens === 'number') {
+      promptTokens = Math.max(promptTokens ?? 0, chunk.usage.prompt_tokens);
+    }
+    if (typeof chunk.usage.completion_tokens === 'number') {
+      completionTokens += chunk.usage.completion_tokens;
+    }
+  };
+
+  const reportPerf = () => {
+    if (!onPerf) return;
+    const now = Date.now();
+    const ttftMs = firstTokenAt ? firstTokenAt - startedAt : null;
+    const decodeMs = firstTokenAt ? now - firstTokenAt : null;
+    onPerf({
+      ttftMs,
+      totalMs: now - startedAt,
+      promptTokens,
+      completionTokens: completionTokens || null,
+      tokensPerSecond:
+        completionTokens && decodeMs > 0
+          ? Math.round((completionTokens / decodeMs) * 10_000) / 10
+          : null,
+    });
+  };
 
   let finalText = '';
   // Once we discover the model can't handle tools at all, stay in plain-stream
@@ -130,15 +174,36 @@ async function streamWithTools({ client, model, messages, onText, onToolEvent })
         model,
         messages: convo,
         ...(toolsDisabled ? {} : { tools: ALL_TOOLS }),
+        ...extras,
         stream: true,
-      });
+        // usage-Chunk am Stream-Ende: Prompt-/Antwort-Tokens für die
+        // Latenz-Diagnose ([perf]-Logzeile und SSE-perf-Event).
+        stream_options: { include_usage: true },
+      }, { signal });
     } catch (err) {
+      if (isAbortError(err)) return finalText;
       // Ollama returns "<model> does not support tools" for vision/embedding/
       // tool-incompatible models. Retry once without the `tools` field so the
       // user still gets an answer — they just lose web-search for this model.
       if (!toolsDisabled && /does not support tools/i.test(err?.message || '')) {
         toolsDisabled = true;
-        stream = await client.chat.completions.create({ model, messages: convo, stream: true });
+        stream = await client.chat.completions.create({
+          model,
+          messages: convo,
+          ...extras,
+          stream: true,
+          stream_options: { include_usage: true },
+        });
+      } else if (Object.keys(extras).length > 0 && /think|reasoning/i.test(err?.message || '')) {
+        // Modelle ohne Denk-Fähigkeit können an reasoning_effort scheitern —
+        // dann lieber ohne das Flag antworten als gar nicht.
+        stream = await client.chat.completions.create({
+          model,
+          messages: convo,
+          ...(toolsDisabled ? {} : { tools: ALL_TOOLS }),
+          stream: true,
+          stream_options: { include_usage: true },
+        });
       } else {
         throw err;
       }
@@ -147,24 +212,48 @@ async function streamWithTools({ client, model, messages, onText, onToolEvent })
     let roundText = '';
     const toolCalls = new Map();
     let finishReason = null;
+    let thinkingSeen = false;
 
-    for await (const chunk of stream) {
-      const choice = chunk.choices?.[0];
-      if (!choice) continue;
-      const delta = choice.delta || {};
-      if (delta.content) {
-        roundText += delta.content;
-        onText(delta.content);
+    try {
+      for await (const chunk of stream) {
+        trackUsage(chunk);
+        const choice = chunk.choices?.[0];
+        if (!choice) continue;
+        const delta = choice.delta || {};
+        // Denk-Modelle streamen die Gedankenkette als `reasoning`-Deltas
+        // (Ollama /v1). Sie wird live an den Client weitergereicht
+        // (onReasoning), damit die UI sie in einem einklappbaren Panel
+        // zeigen kann — die Wartezeit fühlt sich so deutlich kürzer an.
+        // Sie landet aber nie im Antwort-Text oder in der Datenbank.
+        if (delta.reasoning) {
+          if (!firstTokenAt) firstTokenAt = Date.now();
+          if (!thinkingSeen) {
+            thinkingSeen = true;
+            if (onThinking) onThinking();
+          }
+          if (onReasoning) onReasoning(delta.reasoning);
+        }
+        if (delta.content) {
+          if (!firstTokenAt) firstTokenAt = Date.now();
+          roundText += delta.content;
+          onText(delta.content);
+        }
+        if (delta.tool_calls) {
+          mergeToolCallDeltas(toolCalls, delta.tool_calls);
+        }
+        if (choice.finish_reason) finishReason = choice.finish_reason;
       }
-      if (delta.tool_calls) {
-        mergeToolCallDeltas(toolCalls, delta.tool_calls);
-      }
-      if (choice.finish_reason) finishReason = choice.finish_reason;
+    } catch (err) {
+      // Abbruch (Stop-Button): der bereits gestreamte Text bleibt gültig —
+      // ihn zurückgeben statt werfen, damit die Route ihn speichern kann.
+      if (isAbortError(err)) return roundText;
+      throw err;
     }
 
     // Plain answer — we're done.
     if (finishReason !== 'tool_calls' || toolCalls.size === 0) {
       finalText = roundText;
+      reportPerf();
       break;
     }
 

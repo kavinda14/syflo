@@ -5,8 +5,9 @@ conversation, Syflo lets you spin off a side-chat from any word the
 model writes — creating a tree of focused sub-conversations you can
 navigate visually as a mind map.
 
-The whole thing runs on a **local Ollama model** (phi4 by default), so
-no chat data ever leaves your machine.
+The whole thing runs on a **local Ollama vision model** (auto-picked for
+your hardware, `qwen3.5:9b` on a 24 GB machine), so no chat data ever
+leaves your machine.
 
 ---
 
@@ -84,7 +85,7 @@ you can branch immediately if the definition raises more questions.
 | Layer | Stack |
 | --- | --- |
 | Backend | Node.js, Express, SQLite (`better-sqlite3`), OpenAI SDK pointed at local Ollama |
-| Model | Ollama running `phi4` (configurable) |
+| Model | Ollama running a vision model — hardware-recommended (e.g. `qwen3.5:9b`), switchable from the composer |
 | Frontend | Vite, React 19, TypeScript, Tailwind v4, React Flow, react-markdown, Framer Motion |
 | Tests | Vitest + Testing Library (frontend), Jest + Supertest (backend) |
 
@@ -94,7 +95,7 @@ you can branch immediately if the definition raises more questions.
 
 - **Node.js 20+**
 - **[Ollama](https://ollama.com)** running locally on `http://localhost:11434`
-- The **phi4** model pulled: `ollama pull phi4`
+- A **vision model** pulled, e.g. `ollama pull qwen3.5:9b` (or download it from Settings → Models)
 
 ---
 
@@ -186,8 +187,9 @@ across 3 files.
 - **Backend port**: set `PORT` in `backend/.env` (default 3001).
 - **Ollama URL**: hard-coded to `http://localhost:11434/v1` in
   `routes/messages.js` and `routes/explain.js` for now.
-- **Model**: hard-coded to `phi4`. Change the `model:` field in those
-  two files to swap in any model you have via `ollama list`.
+- **Model**: chosen automatically for your hardware (see `backend/hardware.js`)
+  and switchable anytime from the model pill in the chat composer; the
+  library (download/remove) lives in Settings → Models.
 
 ---
 

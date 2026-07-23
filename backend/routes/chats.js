@@ -1,5 +1,6 @@
 const express = require('express');
 const fs = require('fs');
+const { warmUpAncestorSummaries, getAncestorPath } = require('../ancestor-context');
 
 module.exports = (db) => {
   const router = express.Router();
@@ -58,6 +59,34 @@ module.exports = (db) => {
     res.json(roots);
   });
 
+  // Vorfahren-Kette eines Chats (Wurzel → … → direkter Elternchat) mit den
+  // gecachten Summaries — die Read-only-Sicht des UIs auf den geerbten
+  // Kontext (ParentContextPane). Liest nur den Cache, erzeugt nichts.
+  router.get('/:id/ancestors', (req, res) => {
+    const chat = db.prepare('SELECT id FROM chats WHERE id = ?').get(req.params.id);
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+    const ancestors = getAncestorPath(db, req.params.id).map((a) => {
+      // summary_display: JSON {gist, points[]} für das Kontext-Banner —
+      // defensiv geparst, kaputte/fehlende Einträge werden zu null
+      // (das UI fällt dann auf den gerenderten Summary-Volltext zurück).
+      let display = null;
+      if (a.summary_display) {
+        try {
+          display = JSON.parse(a.summary_display);
+        } catch (_) { /* alte/kaputte Zeile — Volltext-Fallback */ }
+      }
+      return {
+        id: a.id,
+        title: a.title,
+        parent_word: a.parent_word,
+        summary: a.summary || null,
+        display,
+      };
+    });
+    res.json(ancestors);
+  });
+
   // Get single chat with messages (and attachments per message)
   router.get('/:id', (req, res) => {
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(req.params.id);
@@ -101,6 +130,15 @@ module.exports = (db) => {
     db.prepare(
       'INSERT INTO chats (id, title, parent_id, parent_word, created_at) VALUES (?, ?, ?, ?, ?)'
     ).run(id, title, parent_id || null, parent_word || null, now);
+
+    // Warm-up (Design 2026-07-20): Die Abzweigung ist das früheste Signal,
+    // dass die Vorfahren-Summaries gleich gebraucht werden. Fire-and-forget —
+    // die Antwort wartet nicht, Fehler fängt der Lazy-Pfad beim Senden ab.
+    if (parent_id) {
+      setImmediate(() => {
+        warmUpAncestorSummaries(db, id).catch(() => {});
+      });
+    }
 
     const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(id);
     res.status(201).json(chat);

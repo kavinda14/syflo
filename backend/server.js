@@ -29,8 +29,18 @@ function createApp(db, options = {}) {
   // Highlights + Labels: Pfade wie /api/papers/:id/highlights und
   // /api/highlight-labels leben in einem Router, daher Mount auf /api.
   app.use('/api', require('./routes/highlights')(db));
-  app.use('/api/settings', require('./routes/settings')(db));
+  // Chat-Text-Highlights: /api/chats/:id/message-highlights und
+  // /api/message-highlights/:id teilen sich einen Router → Mount auf /api.
+  app.use('/api', require('./routes/message-highlights')(db));
+  // Baum-weite Highlight-Übersicht für den Highlights-Drawer:
+  // /api/chats/:id/tree-highlights → Mount auf /api.
+  app.use('/api', require('./routes/tree-highlights')(db));
+  app.use('/api/settings', require('./routes/settings')(db, { system: options.system }));
+  // options.transcribe: { manager } — injizierbar für Tests (Fake-Whisper).
+  app.use('/api/transcribe', require('./routes/transcribe')(options.transcribe));
   app.use('/api/search', require('./routes/search')());
+  // options.system: { totalmem, platform } — injizierbar für Tests.
+  app.use('/api/system', require('./routes/system')(options.system));
 
   app.use((err, req, res, next) => {
     console.error('Error:', err.message);

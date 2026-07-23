@@ -2,17 +2,22 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>FlowTalk · Fun theme prototypes (Warm Paper · Soft Pop · Playful Ink · Candy Terminal)</title>
+<title>Syflo · Themes round 3 (Professional default + four fun themes)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Baloo+2:wght@500;600;700&family=Nunito:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Outfit:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500;600&family=Caveat:wght@500;600;700&family=Quicksand:wght@400;500;600;700&family=Fredoka:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700&family=Archivo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   /* ============================================================
-     One DOM, four personalities. Only the CSS custom properties
-     (and a handful of theme-scoped rules) change per theme.
-     Switch with the chips in the top bar or keys 1–4.
-     The five highlight colors are FIXED product constants and
-     identical in every theme.
+     Round 3 — the shipped theme set (2026-07-18).
+     "Professional" is the app's untouched default palette and the
+     default theme. Ink Blue carries over from round 2; Mushroom
+     Kingdom, Hyrule and Matrix are new. In the app, these map to
+     :root[data-theme] overrides of Tailwind's --color-* variables
+     (frontend/src/index.css) — same semantics, fewer knobs: the
+     app themes recolor surfaces/neutrals/accent, while fonts,
+     radii and shadows stay per-theme flavor shown here.
+     One DOM, themes switch via CSS variables. Keys 1–5.
+     The five highlight colors are FIXED product constants.
      ============================================================ */
 
   :root {
@@ -24,96 +29,131 @@
     --hl-orange: #FED7AA;
   }
 
-  /* ---------- Theme 1 · WARM PAPER (level 1) ------------------
-     Cream + terracotta + sage. A reading room, not an office. */
-  body[data-theme="warm-paper"] {
-    --bg-app: #F6EFE2;
-    --surface: #FFFCF5;
-    --surface-2: #F2E9D8;
-    --text-strong: #33291D;
-    --text-default: #4E4233;
-    --text-muted: #99876C;
-    --border: #E7DBC4;
-    --accent: #C05F33;
-    --accent-hover: #A94E26;
-    --accent-contrast: #FFF8F2;
-    --accent-soft: #F6E2D3;
-    --accent-2: #6F8F6B;
-    --pdf-bg: #EAE0CB;
-    --bubble-user-bg: #C05F33;
-    --bubble-user-text: #FFF8F2;
-    --bubble-ai-bg: #F2E9D8;
-    --radius-s: 9px;
-    --radius-m: 13px;
-    --radius-l: 18px;
+  /* ---------- Theme 1 · PROFESSIONAL (the app default) ---------
+     Clean white + gray with the brand blue accent — exactly the
+     palette the app ships with today. No seasoning. */
+  body[data-theme="professional"] {
+    --bg-app: #FFFFFF;
+    --surface: #FFFFFF;
+    --surface-2: #F9FAFB;
+    --text-strong: #111827;
+    --text-default: #374151;
+    --text-muted: #9CA3AF;
+    --border: #E5E7EB;
+    --accent: #2563EB;
+    --accent-hover: #1D4ED8;
+    --accent-contrast: #FFFFFF;
+    --accent-soft: #EFF6FF;
+    --accent-2: #34D399;
+    --pdf-bg: #F3F4F6;
+    --bubble-user-bg: #2563EB;
+    --bubble-user-text: #FFFFFF;
+    --bubble-ai-bg: #F3F4F6;
+    --radius-s: 8px;
+    --radius-m: 12px;
+    --radius-l: 16px;
     --border-w: 1px;
-    --shadow: 0 1px 3px rgba(80, 60, 30, 0.08), 0 1px 2px rgba(80, 60, 30, 0.05);
-    --shadow-lg: 0 12px 32px rgba(80, 60, 30, 0.13), 0 4px 10px rgba(80, 60, 30, 0.06);
-    --font-ui: 'Plus Jakarta Sans', -apple-system, sans-serif;
-    --font-display: 'Fraunces', Georgia, serif;
+    --shadow: 0 1px 3px rgba(17, 24, 39, 0.08);
+    --shadow-lg: 0 10px 30px rgba(17, 24, 39, 0.10), 0 2px 8px rgba(17, 24, 39, 0.06);
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --font-display: var(--font-ui);
     --font-meta: var(--font-ui);
-    --ease-fun: cubic-bezier(0.25, 0.8, 0.4, 1);
-    --hover-lift: translateY(-1px);
+    --ease-fun: ease;
+    --hover-lift: none;
   }
 
-  /* ---------- Theme 2 · SOFT POP (level 1.5) ------------------
-     Lavender base, pastel accents, everything round & pillowy. */
-  body[data-theme="soft-pop"] {
-    --bg-app: #F3F1FC;
-    --surface: #FFFFFF;
-    --surface-2: #EDEAFB;
-    --text-strong: #322D4F;
-    --text-default: #4B4569;
-    --text-muted: #9690BC;
-    --border: #E4E0F6;
-    --accent: #7B6AEF;
-    --accent-hover: #6553E3;
+  /* ---------- Theme 2 · MUSHROOM KINGDOM -----------------------
+     Warm cream like a question block's glow, Mario-red accent,
+     pipe-green second accent. */
+  body[data-theme="mushroom-kingdom"] {
+    --bg-app: #FFFDF6;
+    --surface: #FFFDF6;
+    --surface-2: #F0E7D1;
+    --text-strong: #2E2614;
+    --text-default: #52452B;
+    --text-muted: #A08A5E;
+    --border: #E3D5B4;
+    --accent: #D02B1D;
+    --accent-hover: #AC2015;
     --accent-contrast: #FFFFFF;
-    --accent-soft: #ECE8FE;
-    --accent-2: #EF6AA7;
-    --pdf-bg: #E7E3F8;
-    --bubble-user-bg: #7B6AEF;
+    --accent-soft: #FDECE9;
+    --accent-2: #43B047;
+    --pdf-bg: #F3EAD5;
+    --bubble-user-bg: #D02B1D;
     --bubble-user-text: #FFFFFF;
-    --bubble-ai-bg: #F1EFFB;
-    --radius-s: 12px;
-    --radius-m: 18px;
-    --radius-l: 24px;
+    --bubble-ai-bg: #F0E7D1;
+    --radius-s: 10px;
+    --radius-m: 14px;
+    --radius-l: 18px;
     --border-w: 1px;
-    --shadow: 0 2px 6px rgba(80, 70, 160, 0.08), 0 1px 2px rgba(80, 70, 160, 0.05);
-    --shadow-lg: 0 14px 36px rgba(80, 70, 160, 0.16), 0 4px 12px rgba(80, 70, 160, 0.08);
-    --font-ui: 'Nunito', -apple-system, sans-serif;
-    --font-display: 'Baloo 2', 'Nunito', sans-serif;
+    --shadow: 0 2px 5px rgba(80, 60, 20, 0.12);
+    --shadow-lg: 0 12px 30px rgba(80, 60, 20, 0.16), 0 4px 10px rgba(80, 60, 20, 0.08);
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --font-display: var(--font-ui);
+    --font-meta: var(--font-ui);
+    --ease-fun: cubic-bezier(0.34, 1.56, 0.64, 1);
+    --hover-lift: translateY(-2px);
+  }
+
+  /* ---------- Theme 3 · HYRULE ---------------------------------
+     Aged parchment, Kokiri forest-green accent, triforce gold as
+     the second accent. */
+  body[data-theme="hyrule"] {
+    --bg-app: #FCFAF2;
+    --surface: #FCFAF2;
+    --surface-2: #EDE9D6;
+    --text-strong: #2B2818;
+    --text-default: #4D4830;
+    --text-muted: #98916A;
+    --border: #DED8BC;
+    --accent: #41702C;
+    --accent-hover: #335A22;
+    --accent-contrast: #FFFFFF;
+    --accent-soft: #ECF3E4;
+    --accent-2: #D9A521;
+    --pdf-bg: #EFEBD8;
+    --bubble-user-bg: #41702C;
+    --bubble-user-text: #FFFFFF;
+    --bubble-ai-bg: #EDE9D6;
+    --radius-s: 8px;
+    --radius-m: 12px;
+    --radius-l: 16px;
+    --border-w: 1px;
+    --shadow: 0 2px 5px rgba(60, 55, 25, 0.12);
+    --shadow-lg: 0 12px 30px rgba(60, 55, 25, 0.16), 0 4px 10px rgba(60, 55, 25, 0.08);
+    --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    --font-display: var(--font-ui);
     --font-meta: var(--font-ui);
     --ease-fun: cubic-bezier(0.34, 1.4, 0.5, 1);
     --hover-lift: translateY(-2px);
   }
 
-  /* ---------- Theme 3 · PLAYFUL INK (level 2) -----------------
-     Warm white, deep indigo ink lines, punchy pink second accent,
-     springy motion. Confident, hand-drawn energy without chaos. */
-  body[data-theme="playful-ink"] {
-    --bg-app: #FFFCF4;
+  /* ---------- Theme 4 · INK BLUE (round-2 favorite) ------------
+     Playful Ink's cool navy neutrals carrying the existing brand
+     blue + green. */
+  body[data-theme="ink-blue"] {
+    --bg-app: #F8FBFE;
     --surface: #FFFFFF;
-    --surface-2: #F7F3E8;
-    --text-strong: #221D45;
-    --text-default: #3A3563;
-    --text-muted: #7A76A3;
-    --border: #2A2453;
-    --accent: #5B4FE9;
-    --accent-hover: #4438D6;
+    --surface-2: #EEF4FB;
+    --text-strong: #14263F;
+    --text-default: #2C4059;
+    --text-muted: #6E82A3;
+    --border: #1C2B4A;
+    --accent: #3B82F6;
+    --accent-hover: #2563EB;
     --accent-contrast: #FFFFFF;
-    --accent-soft: #EDEBFF;
-    --accent-2: #FF5C8A;
-    --pdf-bg: #F3EDDD;
-    --bubble-user-bg: #5B4FE9;
+    --accent-soft: #E3EEFE;
+    --accent-2: #34D399;
+    --pdf-bg: #E7EEF6;
+    --bubble-user-bg: #3B82F6;
     --bubble-user-text: #FFFFFF;
-    --bubble-ai-bg: #F7F3E8;
+    --bubble-ai-bg: #EEF4FB;
     --radius-s: 10px;
     --radius-m: 14px;
     --radius-l: 18px;
     --border-w: 1.5px;
-    --shadow: 0 2px 0 rgba(42, 36, 83, 0.18);
-    --shadow-lg: 0 6px 0 rgba(42, 36, 83, 0.14), 0 16px 32px rgba(42, 36, 83, 0.10);
+    --shadow: 0 2px 0 rgba(28, 43, 74, 0.18);
+    --shadow-lg: 0 6px 0 rgba(28, 43, 74, 0.14), 0 16px 32px rgba(28, 43, 74, 0.10);
     --font-ui: 'DM Sans', -apple-system, sans-serif;
     --font-display: 'Space Grotesk', 'DM Sans', sans-serif;
     --font-meta: var(--font-ui);
@@ -121,41 +161,42 @@
     --hover-lift: translateY(-2px);
   }
 
-  /* ---------- Theme 4 · CANDY TERMINAL (level 2, dark) --------
-     Deep plum night mode with neon candy accents and a mono
-     voice for metadata. Playful the way a synthwave desk is. */
-  body[data-theme="candy-terminal"] {
-    --bg-app: #16121F;
-    --surface: #1F1930;
-    --surface-2: #2A2242;
-    --text-strong: #F3EEFF;
-    --text-default: #C9C1E2;
-    --text-muted: #877DAE;
-    --border: #372C55;
-    --accent: #FF7EB6;
-    --accent-hover: #FF5CA5;
-    --accent-contrast: #23102A;
-    --accent-soft: rgba(255, 126, 182, 0.14);
-    --accent-2: #6EE7C8;
-    --pdf-bg: #100C18;
-    --bubble-user-bg: #FF7EB6;
-    --bubble-user-text: #2A1030;
-    --bubble-ai-bg: #2A2242;
-    --radius-s: 10px;
-    --radius-m: 14px;
-    --radius-l: 18px;
+  /* ---------- Theme 5 · MATRIX ---------------------------------
+     Dark terminal: near-black surfaces, phosphor-green accent,
+     monospace everywhere. PDF pages stay paper-white — they are
+     rendered document content, not UI. */
+  body[data-theme="matrix"] {
+    --bg-app: #0B120E;
+    --surface: #0F1813;
+    --surface-2: #14201A;
+    --text-strong: #DCF9E6;
+    --text-default: #BCE9CB;
+    --text-muted: #639C79;
+    --border: #1D2F25;
+    --accent: #17B84F;
+    --accent-hover: #58E68C;
+    --accent-contrast: #0B120E;
+    --accent-soft: #0F2617;
+    --accent-2: #2EE06E;
+    --pdf-bg: #0A0F0C;
+    --bubble-user-bg: #17B84F;
+    --bubble-user-text: #0B120E;
+    --bubble-ai-bg: #14201A;
+    --radius-s: 8px;
+    --radius-m: 12px;
+    --radius-l: 16px;
     --border-w: 1px;
-    --shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
-    --shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.5), 0 0 24px rgba(255, 126, 182, 0.10);
-    --font-ui: 'Outfit', -apple-system, sans-serif;
-    --font-display: 'Outfit', sans-serif;
-    --font-meta: 'JetBrains Mono', monospace;
-    --ease-fun: cubic-bezier(0.34, 1.45, 0.6, 1);
+    --shadow: 0 0 10px rgba(46, 224, 110, 0.10);
+    --shadow-lg: 0 0 24px rgba(46, 224, 110, 0.14), 0 12px 30px rgba(0, 0, 0, 0.5);
+    --font-ui: 'JetBrains Mono', ui-monospace, monospace;
+    --font-display: 'JetBrains Mono', ui-monospace, monospace;
+    --font-meta: 'JetBrains Mono', ui-monospace, monospace;
+    --ease-fun: cubic-bezier(0.3, 1.3, 0.6, 1);
     --hover-lift: translateY(-1px);
   }
 
   /* ============================================================
-     Base layout — everything below uses the variables only.
+     Base layout — variables only below this line.
      ============================================================ */
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -171,25 +212,26 @@
 
   /* ---------- Theme switcher bar ---------- */
   .switcher {
-    display: flex; align-items: center; gap: 10px;
+    display: flex; align-items: center; gap: 8px;
     padding: 12px 20px;
     flex-shrink: 0;
   }
   .switcher .title {
     font-family: var(--font-display);
     font-size: 15px; font-weight: 700; color: var(--text-strong);
-    margin-right: 8px; letter-spacing: -0.01em;
+    margin-right: 6px; letter-spacing: -0.01em;
   }
   .chip {
-    display: flex; align-items: center; gap: 9px;
-    padding: 7px 13px 7px 10px;
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 11px 6px 9px;
     border: var(--border-w) solid var(--border);
     border-radius: 999px;
     background: var(--surface);
     color: var(--text-default);
-    font: inherit; font-size: 12.5px; font-weight: 600;
+    font: inherit; font-size: 12px; font-weight: 600;
     cursor: pointer;
     transition: all 200ms var(--ease-fun);
+    white-space: nowrap;
   }
   .chip:hover { transform: var(--hover-lift); box-shadow: var(--shadow); }
   .chip.active {
@@ -204,7 +246,7 @@
     font-family: var(--font-meta); font-size: 10px; font-weight: 600;
     color: var(--text-muted);
     border: 1px solid var(--border); border-radius: 5px;
-    padding: 1px 5px; margin-left: 2px;
+    padding: 1px 5px; margin-left: 1px;
   }
   .switcher .hint {
     margin-left: auto; font-size: 12px; color: var(--text-muted);
@@ -540,103 +582,113 @@
   .composer .send svg { width: 16px; height: 16px; }
 
   /* ============================================================
-     Theme-scoped seasoning — small personality touches only.
+     Theme-scoped seasoning.
      ============================================================ */
 
-  /* Soft Pop: extra-round everything, send button is a pill circle */
-  body[data-theme="soft-pop"] .composer .send { border-radius: 50%; }
-  body[data-theme="soft-pop"] .node { border-radius: 999px; }
-  body[data-theme="soft-pop"] .msg .bubble { box-shadow: var(--shadow); }
+  /* Ink Blue: visible outlines + offset "sticker" shadows (from round 2) */
+  body[data-theme="ink-blue"] .branch-pill,
+  body[data-theme="ink-blue"] .composer .send,
+  body[data-theme="ink-blue"] .model-pill,
+  body[data-theme="ink-blue"] .chip.active {
+    border: 1.5px solid #1C2B4A;
+    box-shadow: 0 3px 0 #1C2B4A;
+  }
+  body[data-theme="ink-blue"] .composer .send:hover,
+  body[data-theme="ink-blue"] .branch-pill:hover {
+    box-shadow: 0 5px 0 #1C2B4A;
+  }
+  body[data-theme="ink-blue"] .msg.user .bubble {
+    border: 1.5px solid #1C2B4A;
+    box-shadow: 3px 3px 0 #1C2B4A;
+  }
+  body[data-theme="ink-blue"] .msg.assistant .bubble {
+    border: 1.5px solid #1C2B4A;
+  }
+  body[data-theme="ink-blue"] .pdf-page {
+    border: 1.5px solid #1C2B4A;
+    box-shadow: 6px 6px 0 color-mix(in srgb, #1C2B4A 16%, transparent);
+  }
+  body[data-theme="ink-blue"] .node.active { border: 1.5px solid #1C2B4A; }
 
-  /* Playful Ink: visible ink outlines + offset "sticker" shadows */
-  body[data-theme="playful-ink"] .branch-pill,
-  body[data-theme="playful-ink"] .composer .send,
-  body[data-theme="playful-ink"] .model-pill,
-  body[data-theme="playful-ink"] .chip.active {
-    border: 1.5px solid var(--border);
-    box-shadow: 0 3px 0 var(--border);
-  }
-  body[data-theme="playful-ink"] .composer .send:hover,
-  body[data-theme="playful-ink"] .branch-pill:hover {
-    box-shadow: 0 5px 0 var(--border);
-  }
-  body[data-theme="playful-ink"] .msg.user .bubble {
-    border: 1.5px solid var(--border);
-    box-shadow: 3px 3px 0 var(--border);
-  }
-  body[data-theme="playful-ink"] .msg.assistant .bubble {
-    border: 1.5px solid var(--border);
-  }
-  body[data-theme="playful-ink"] .pdf-page {
-    border: 1.5px solid var(--border);
-    box-shadow: 6px 6px 0 rgba(42, 36, 83, 0.16);
-  }
-  body[data-theme="playful-ink"] .node.active { border: 1.5px solid var(--border); }
+  /* Mushroom Kingdom: springy hover, coin-gold active dot */
+  body[data-theme="mushroom-kingdom"] .logo:hover .mark { transform: rotate(-10deg) scale(1.14); }
+  body[data-theme="mushroom-kingdom"] .node.active .dot { background: #FBD000; }
+  body[data-theme="mushroom-kingdom"] .branch-pill:hover { transform: var(--hover-lift) rotate(-1.5deg); }
 
-  /* Candy Terminal: neon glow on the interactive core */
-  body[data-theme="candy-terminal"] .composer .send {
-    box-shadow: 0 0 16px rgba(255, 126, 182, 0.35);
+  /* Hyrule: gold second-accent on the active node, calm motion */
+  body[data-theme="hyrule"] .node.active .dot { background: var(--accent-2); }
+  body[data-theme="hyrule"] .model-pill .dot { background: var(--accent-2); }
+
+  /* Matrix: phosphor glow on interactive accents, uppercase meta */
+  body[data-theme="matrix"] .composer .send,
+  body[data-theme="matrix"] .branch-pill {
+    box-shadow: 0 0 12px rgba(46, 224, 110, 0.35);
   }
-  body[data-theme="candy-terminal"] .composer .send:hover {
-    box-shadow: 0 0 26px rgba(255, 126, 182, 0.55);
+  body[data-theme="matrix"] .composer textarea:focus {
+    box-shadow: 0 0 0 3px rgba(46, 224, 110, 0.20), 0 0 14px rgba(46, 224, 110, 0.25);
   }
-  body[data-theme="candy-terminal"] .node.active {
-    box-shadow: inset 2px 0 0 var(--accent);
-  }
-  body[data-theme="candy-terminal"] .branch-pill {
-    box-shadow: 0 0 14px rgba(255, 126, 182, 0.3);
-  }
-  body[data-theme="candy-terminal"] .pdf-page {
-    box-shadow: 0 4px 16px rgba(0,0,0,0.5), 0 16px 48px rgba(0,0,0,0.4);
-  }
-  body[data-theme="candy-terminal"] .model-pill .dot {
+  body[data-theme="matrix"] .model-pill .dot {
     box-shadow: 0 0 8px var(--accent-2);
+  }
+  body[data-theme="matrix"] .chat-title,
+  body[data-theme="matrix"] .logo { text-transform: uppercase; letter-spacing: 0.03em; font-size: 13.5px; }
+  body[data-theme="matrix"] .pdf-page {
+    box-shadow: 0 0 0 1px var(--border), 0 0 24px rgba(0, 0, 0, 0.6);
   }
 </style>
 </head>
-<body data-theme="warm-paper">
+<body data-theme="professional">
 
   <!-- ---------- Theme switcher ---------- -->
   <div class="switcher">
-    <span class="title">FlowTalk fun themes</span>
+    <span class="title">Syflo themes · round 3</span>
 
-    <button class="chip active" data-set="warm-paper">
+    <button class="chip active" data-set="professional">
       <span class="swatches">
-        <span class="sw" style="background:#F6EFE2"></span>
-        <span class="sw" style="background:#C05F33"></span>
-        <span class="sw" style="background:#6F8F6B"></span>
+        <span class="sw" style="background:#FFFFFF;border:1px solid #ccc"></span>
+        <span class="sw" style="background:#2563EB"></span>
+        <span class="sw" style="background:#6B7280"></span>
       </span>
-      Warm Paper <kbd>1</kbd>
+      Professional <kbd>1</kbd>
     </button>
 
-    <button class="chip" data-set="soft-pop">
+    <button class="chip" data-set="mushroom-kingdom">
       <span class="swatches">
-        <span class="sw" style="background:#F3F1FC"></span>
-        <span class="sw" style="background:#7B6AEF"></span>
-        <span class="sw" style="background:#EF6AA7"></span>
+        <span class="sw" style="background:#FFFDF6;border:1px solid #ccc"></span>
+        <span class="sw" style="background:#D02B1D"></span>
+        <span class="sw" style="background:#43B047"></span>
       </span>
-      Soft Pop <kbd>2</kbd>
+      Mushroom Kingdom <kbd>2</kbd>
     </button>
 
-    <button class="chip" data-set="playful-ink">
+    <button class="chip" data-set="hyrule">
       <span class="swatches">
-        <span class="sw" style="background:#FFFCF4;border:1px solid #ddd"></span>
-        <span class="sw" style="background:#5B4FE9"></span>
-        <span class="sw" style="background:#FF5C8A"></span>
+        <span class="sw" style="background:#FCFAF2;border:1px solid #ccc"></span>
+        <span class="sw" style="background:#41702C"></span>
+        <span class="sw" style="background:#D9A521"></span>
       </span>
-      Playful Ink <kbd>3</kbd>
+      Hyrule <kbd>3</kbd>
     </button>
 
-    <button class="chip" data-set="candy-terminal">
+    <button class="chip" data-set="ink-blue">
       <span class="swatches">
-        <span class="sw" style="background:#16121F"></span>
-        <span class="sw" style="background:#FF7EB6"></span>
-        <span class="sw" style="background:#6EE7C8"></span>
+        <span class="sw" style="background:#F8FBFE;border:1px solid #ccc"></span>
+        <span class="sw" style="background:#3B82F6"></span>
+        <span class="sw" style="background:#34D399"></span>
       </span>
-      Candy Terminal <kbd>4</kbd>
+      Ink Blue <kbd>4</kbd>
     </button>
 
-    <span class="hint">Press 1–4 to switch · hover things — motion is part of each theme</span>
+    <button class="chip" data-set="matrix">
+      <span class="swatches">
+        <span class="sw" style="background:#0B120E"></span>
+        <span class="sw" style="background:#17B84F"></span>
+        <span class="sw" style="background:#2EE06E"></span>
+      </span>
+      Matrix <kbd>5</kbd>
+    </button>
+
+    <span class="hint">Press 1–5 to switch · hover things — motion is part of each theme</span>
   </div>
 
   <!-- ---------- App frame: the unchanged three-column layout ---------- -->
@@ -825,7 +877,7 @@
 
 <script>
   const chips = document.querySelectorAll('.chip');
-  const themes = ['warm-paper', 'soft-pop', 'playful-ink', 'candy-terminal'];
+  const themes = ['professional', 'mushroom-kingdom', 'hyrule', 'ink-blue', 'matrix'];
 
   function setTheme(name) {
     document.body.dataset.theme = name;

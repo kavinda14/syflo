@@ -13,6 +13,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { api } from '../api';
+import { invalidateTreeHighlights } from './useTreeHighlights';
 import type { CreateHighlightPayload, Highlight, HighlightColor } from '../types';
 
 interface State {
@@ -80,6 +81,9 @@ export function useHighlights(paperId: string | null) {
           ...s,
           highlights: s.highlights.map((h) => (h.id === tempId ? created : h)),
         }));
+        // Der Highlights-Drawer liest die baum-weite Liste — nach jeder
+        // erfolgreichen Mutation invalidieren, damit er synchron bleibt.
+        invalidateTreeHighlights();
         return created;
       } catch (err) {
         setState((s) => ({
@@ -111,6 +115,7 @@ export function useHighlights(paperId: string | null) {
           ...s,
           highlights: s.highlights.map((h) => (h.id === hid ? updated : h)),
         }));
+        invalidateTreeHighlights();
         return updated;
       } catch (err) {
         if (previous) {
@@ -135,6 +140,7 @@ export function useHighlights(paperId: string | null) {
     });
     try {
       await api.deleteHighlight(hid);
+      invalidateTreeHighlights();
       return true;
     } catch (err) {
       if (previous) {

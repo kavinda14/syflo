@@ -39,7 +39,7 @@ export function VoiceWaveform({ volume, bars = 24, height = 36 }: Props) {
       className="flex items-center justify-center gap-[3px] w-full"
       style={{ height }}
       data-testid="voice-waveform"
-      aria-label="Aufnahme-Lautstärke"
+      aria-label="Recording volume"
       role="img"
     >
       {Array.from({ length: bars }).map((_, i) => {
@@ -56,7 +56,10 @@ export function VoiceWaveform({ volume, bars = 24, height = 36 }: Props) {
         return (
           <div
             key={i}
-            className="w-1 rounded-full bg-red-500"
+            // Akzentfarbe als var statt bg-blue-500: die unlayered Regeln in
+            // index.css (`.bg-blue-500:not(.w-2)` u. a.) würden jedem Balken
+            // einen Cartoon-Offset-Schatten verpassen.
+            className="w-1 rounded-full bg-[var(--color-blue-500)]"
             style={{
               height: `${Math.min(100, h * 100)}%`,
             }}

@@ -6,9 +6,10 @@
  * pdf.js itself is mocked behind the loadPdfDocument wrapper module.
  */
 
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { PdfView } from '../components/PdfView';
+import { createRef } from 'react';
+import { PdfView, type PdfViewHandle } from '../components/PdfView';
 
 const renderPage = vi.fn().mockResolvedValue(undefined);
 const renderTextLayer = vi.fn().mockResolvedValue(undefined);
@@ -115,6 +116,36 @@ describe('PdfView', () => {
       // Der eigentliche Bug: Breite/Höhe blieben in Syflo bei 200/12 hängen.
       expect(at125.style.width).toBe('250px');
       expect(at125.style.height).toBe('15px');
+    });
+
+    it('scrollToHighlight scrollt zum Rect, aktualisiert die Seite und blinkt ~1,5 s (Drawer-Sprung)', async () => {
+      // jsdom kennt Element.scrollTo nicht — stubben und Aufruf prüfen.
+      const scrollTo = vi.fn();
+      (HTMLElement.prototype as unknown as { scrollTo: typeof scrollTo }).scrollTo = scrollTo;
+
+      const ref = createRef<PdfViewHandle>();
+      render(<PdfView ref={ref} pdfUrl="/api/papers/p1/pdf" highlights={[highlight]} />);
+      await waitFor(() => expect(screen.getAllByTestId('pdf-color-highlight-h1').length).toBe(2));
+
+      vi.useFakeTimers();
+      try {
+        act(() => ref.current!.scrollToHighlight('h1'));
+
+        expect(scrollTo).toHaveBeenCalled();
+        expect(screen.getByTestId('pdf-page-indicator')).toHaveTextContent('2 / 3');
+        for (const el of screen.getAllByTestId('pdf-color-highlight-h1')) {
+          expect(el).toHaveAttribute('data-flash', 'true');
+        }
+
+        act(() => {
+          vi.advanceTimersByTime(1600);
+        });
+        for (const el of screen.getAllByTestId('pdf-color-highlight-h1')) {
+          expect(el).not.toHaveAttribute('data-flash');
+        }
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it('Klick auf ein Highlight ruft onColorHighlightClick auf', async () => {

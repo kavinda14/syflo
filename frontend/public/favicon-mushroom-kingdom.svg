@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- Mushroom Kingdom favicon — mushroom-cap tile: red with white cap dots,
+       cream pixel branch mark, yellow accent node.
+       Design source: design/mockup-logo-icons.html (Mushroom Kingdom, Favicon-Test) -->
+  <rect x="1.5" y="1.5" width="45" height="45" rx="7" fill="#D8433B" stroke="#26264F" stroke-width="3"/>
+  <g fill="#FFF9EE" shape-rendering="crispEdges">
+    <rect x="4"  y="20" width="16" height="8"/>
+    <rect x="16" y="12" width="10" height="8"/>
+    <rect x="16" y="28" width="10" height="8"/>
+    <rect x="26" y="30" width="14" height="14"/>
+  </g>
+  <rect x="26" y="4" width="14" height="14" fill="#EFB43A" shape-rendering="crispEdges"/>
+  <circle cx="8.5" cy="8.5" r="3" fill="#FFF9EE"/>
+  <circle cx="8.5" cy="40" r="3" fill="#FFF9EE"/>
+</svg>

@@ -18,6 +18,9 @@ build/
 # User-uploaded message attachments
 uploads/
 
+# Whisper models (480 MB) — downloaded by scripts/setup-whisper.sh
+models/
+
 # Logs
 logs/
 *.log

@@ -16,6 +16,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import App from '../App';
 import { _resetLabelsCacheForTests } from '../hooks/useLabels';
+import { _resetTreeHighlightsCacheForTests } from '../hooks/useTreeHighlights';
 import type { Chat, ChatDetail, Highlight, Paper } from '../types';
 
 vi.mock('../api', () => ({
@@ -23,7 +24,18 @@ vi.mock('../api', () => ({
   api: {
     getTree: vi.fn(),
     getSettings: vi.fn(),
+    // Modell-System v2: App ruft diese beim Start auf — Defaults, damit
+    // bestehende Tests ohne eigenes Setup weiterlaufen.
+    applyRecommendedModel: vi.fn().mockResolvedValue({ applied: false, model: '' }),
+    warmupChat: vi.fn().mockResolvedValue(undefined),
+    getOllamaModels: vi.fn().mockResolvedValue([]),
+    getSystemRecommendation: vi.fn().mockRejectedValue(new Error('none')),
+    updateSettings: vi.fn(),
+    pullOllamaModel: vi.fn().mockResolvedValue(undefined),
+    deleteOllamaModel: vi.fn().mockResolvedValue(undefined),
     getChat: vi.fn(),
+    // Kontext-Banner (Variante 3a): wird für jeden Branch-Chat gerufen.
+    getAncestors: vi.fn().mockResolvedValue([]),
     getTreePaper: vi.fn(),
     uploadPaper: vi.fn(),
     createChat: vi.fn(),
@@ -32,6 +44,11 @@ vi.mock('../api', () => ({
     sendMessageStream: vi.fn(),
     explainWord: vi.fn(),
     listHighlights: vi.fn(),
+    listTreeHighlights: vi.fn(),
+    listMessageHighlights: vi.fn(),
+    createMessageHighlight: vi.fn(),
+    updateMessageHighlight: vi.fn(),
+    deleteMessageHighlight: vi.fn(),
     createHighlight: vi.fn(),
     updateHighlight: vi.fn(),
     deleteHighlight: vi.fn(),
@@ -42,13 +59,22 @@ vi.mock('../api', () => ({
 
 // Stub-PdfView: reicht die App-Props über Testknöpfe durch. Ein Klick auf
 // "simulate-pdf-rightclick" entspricht: Selektion erfasst, dann contextmenu.
-vi.mock('../components/PdfView', () => ({
+// __pdfScrollSpy zeichnet scrollToHighlight-Aufrufe der App auf (Drawer-Sprung).
+vi.mock('../components/PdfView', () => {
+  const scrollSpy = vi.fn();
+  return {
+  __pdfScrollSpy: scrollSpy,
   PdfView: (props: {
     highlights?: Highlight[];
     onCaptureHighlight?: (sel: unknown) => void;
     onContextMenu?: (e: React.MouseEvent) => void;
     onColorHighlightClick?: (h: Highlight, e: React.MouseEvent) => void;
-  }) => (
+    ref?: React.Ref<{ scrollToHighlight: (id: string) => void }>;
+  }) => {
+    if (props.ref && typeof props.ref === 'object') {
+      (props.ref as { current: unknown }).current = { scrollToHighlight: scrollSpy };
+    }
+    return (
     <div data-testid="fake-pdf-view">
       <button
         data-testid="simulate-pdf-rightclick"
@@ -69,10 +95,14 @@ vi.mock('../components/PdfView', () => ({
         />
       ))}
     </div>
-  ),
-}));
+    );
+  },
+  };
+});
 
 import { api } from '../api';
+// @ts-expect-error — Spy aus dem PdfView-Mock (nur im Test-Modul vorhanden).
+import { __pdfScrollSpy } from '../components/PdfView';
 
 const rootChat: Chat = {
   id: 'c1',
@@ -108,11 +138,14 @@ const savedHighlight: Highlight = {
 beforeEach(() => {
   vi.clearAllMocks();
   _resetLabelsCacheForTests();
+  _resetTreeHighlightsCacheForTests();
+  vi.mocked(api.listTreeHighlights).mockResolvedValue([]);
   vi.mocked(api.getTree).mockResolvedValue([rootChat]);
   vi.mocked(api.getSettings).mockRejectedValue(new Error('none'));
   vi.mocked(api.getChat).mockResolvedValue(rootDetail);
   vi.mocked(api.getTreePaper).mockResolvedValue(paper);
   vi.mocked(api.listHighlights).mockResolvedValue([]);
+  vi.mocked(api.listMessageHighlights).mockResolvedValue([]);
   vi.mocked(api.getHighlightLabels).mockResolvedValue({
     yellow: 'Important', green: 'Agree', blue: 'Reference', pink: 'Question', orange: 'Disagree',
   });
@@ -246,5 +279,117 @@ describe('App — Highlight-Flows (Slices 04–06)', () => {
       await openMenu();
       expect(screen.queryByText(/open linked chat/i)).not.toBeInTheDocument();
     });
+  });
+});
+
+describe('App — Highlights-Drawer (mockup-highlights-overview.html, Variante A)', () => {
+  it('Der Highlighter-Knopf im Chat-Header öffnet den Drawer; X schließt ihn', async () => {
+    vi.mocked(api.listTreeHighlights).mockResolvedValue([
+      {
+        kind: 'pdf', id: 'h1', color: 'yellow', text: 'inverse dynamics model',
+        paperId: 'p1', pageNumber: 2, rects: [{ left: 50, top: 25, width: 200, height: 12 }],
+        chatId: null, createdAt: '2026-07-16T00:00:00.000Z', updatedAt: '2026-07-16T00:00:00.000Z',
+      },
+    ]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Paper chat')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Paper chat'));
+    await waitFor(() => expect(screen.getByTestId('fake-pdf-view')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Highlights' }));
+    await waitFor(() => expect(screen.getByTestId('highlights-drawer')).toBeInTheDocument());
+    expect(api.listTreeHighlights).toHaveBeenCalledWith('c1');
+    expect(await screen.findByText('PDF · p. 2')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close highlights' }));
+    expect(screen.queryByTestId('highlights-drawer')).not.toBeInTheDocument();
+  });
+
+  it('Rechtsklick auf eine Drawer-Karte öffnet das Aktions-Menü', async () => {
+    vi.mocked(api.listTreeHighlights).mockResolvedValue([
+      {
+        kind: 'pdf', id: 'h1', color: 'yellow', text: 'inverse dynamics model',
+        paperId: 'p1', pageNumber: 2, rects: [{ left: 50, top: 25, width: 200, height: 12 }],
+        chatId: null, createdAt: '2026-07-16T00:00:00.000Z', updatedAt: '2026-07-16T00:00:00.000Z',
+      },
+    ]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Paper chat')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Paper chat'));
+    await waitFor(() => expect(screen.getByTestId('fake-pdf-view')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Highlights' }));
+
+    fireEvent.contextMenu(await screen.findByText('PDF · p. 2'), { clientX: 40, clientY: 50 });
+    await waitFor(() =>
+      expect(screen.getByTestId('highlight-actions-menu')).toBeInTheDocument(),
+    );
+    expect(screen.getByText(/delete highlight/i)).toBeInTheDocument();
+  });
+
+  it('Klick auf eine PDF-Karte scrollt das PDF zum Highlight; der Drawer bleibt offen', async () => {
+    vi.mocked(api.listTreeHighlights).mockResolvedValue([
+      {
+        kind: 'pdf', id: 'h1', color: 'yellow', text: 'inverse dynamics model',
+        paperId: 'p1', pageNumber: 2, rects: [{ left: 50, top: 25, width: 200, height: 12 }],
+        chatId: null, createdAt: '2026-07-16T00:00:00.000Z', updatedAt: '2026-07-16T00:00:00.000Z',
+      },
+    ]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Paper chat')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Paper chat'));
+    await waitFor(() => expect(screen.getByTestId('fake-pdf-view')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Highlights' }));
+
+    fireEvent.click(await screen.findByText('PDF · p. 2'));
+
+    expect(__pdfScrollSpy).toHaveBeenCalledWith('h1');
+    expect(screen.getByTestId('highlights-drawer')).toBeInTheDocument();
+  });
+
+  it('Klick auf eine Chat-Karte wechselt den Branch, schließt den Drawer und blinkt die Nachricht an', async () => {
+    const branchChat: Chat = {
+      id: 'c2', title: 'entropy bonus', parent_id: 'c1', parent_word: 'entropy',
+      created_at: '2026-07-12T00:00:00Z', children: [],
+    };
+    const branchDetail: ChatDetail = {
+      ...branchChat,
+      messages: [
+        { id: 'mb1', chat_id: 'c2', role: 'assistant', content: 'the entropy bonus is annealed', created_at: '2026-07-12T00:01:00Z' },
+      ],
+      children: [],
+    };
+    vi.mocked(api.getTree).mockResolvedValue([{ ...rootChat, children: [branchChat] }]);
+    vi.mocked(api.getChat).mockImplementation(async (id: string) =>
+      id === 'c2' ? branchDetail : rootDetail,
+    );
+    vi.mocked(api.listTreeHighlights).mockResolvedValue([
+      {
+        kind: 'chat', id: 'mh1', color: 'orange', text: 'annealed', chatId: 'c2',
+        chatTitle: 'entropy bonus', messageId: 'mb1', startOffset: 22, endOffset: 30,
+        createdAt: '2026-07-19T00:00:00.000Z', updatedAt: '2026-07-19T00:00:00.000Z',
+      },
+    ]);
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Paper chat')).toBeInTheDocument());
+    fireEvent.click(screen.getByText('Paper chat'));
+    await waitFor(() => expect(screen.getByTestId('fake-pdf-view')).toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Highlights' }));
+
+    fireEvent.click(await screen.findByText('Chat · entropy bonus'));
+
+    // Branch geladen, Drawer zu — und es blinkt die MARKIERUNG selbst
+    // (data-flash-range), nicht mehr die ganze Bubble (Nutzerkorrektur
+    // 2026-07-22).
+    await waitFor(() => expect(api.getChat).toHaveBeenCalledWith('c2'));
+    await waitFor(() => expect(screen.getByTestId('message-row-mb1')).toBeInTheDocument());
+    expect(screen.queryByTestId('highlights-drawer')).not.toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByTestId('message-row-mb1')).toHaveAttribute('data-flash-range', 'true'),
+    );
+    expect(screen.getByTestId('message-row-mb1')).not.toHaveAttribute('data-flash');
   });
 });

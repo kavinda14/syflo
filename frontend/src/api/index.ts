@@ -10,7 +10,7 @@
  * chunk so the UI can update in real time — exactly like ChatGPT's typing effect.
  */
 
-import type { Chat, ChatDetail, CreateHighlightPayload, Highlight, HighlightColor, HighlightLabels, LocalAttachment, Message, Paper, PaperSearchResponse, Settings, SettingsUpdate, ToolEvent } from '../types';
+import type { Chat, ChatAncestor, ChatDetail, CreateHighlightPayload, CreateMessageHighlightPayload, Highlight, HighlightColor, HighlightLabels, LocalAttachment, Message, MessageHighlight, OllamaModelInfo, Paper, PaperSearchResponse, PullProgress, Settings, SettingsUpdate, SystemRecommendation, ToolEvent, TreeHighlight, WarmupResult } from '../types';
 
 const BASE = '/api';
 
@@ -41,6 +41,14 @@ export const api = {
     return res.json();
   },
 
+  // Fetches the ancestor path (root → … → direct parent) of a branch chat,
+  // including the cached summaries the LLM inherits. Empty for root chats.
+  async getAncestors(id: string): Promise<ChatAncestor[]> {
+    const res = await fetch(`${BASE}/chats/${id}/ancestors`);
+    if (!res.ok) throw new Error('Failed to fetch ancestors');
+    return res.json();
+  },
+
   // Creates a new chat. parent_id and parent_word are set when branching from
   // a specific word in an existing conversation.
   async createChat(title: string, parent_id?: string, parent_word?: string): Promise<Chat> {
@@ -65,22 +73,31 @@ export const api = {
     // streaming response. The UI uses this to show "Searching the web for X…"
     // and then a sources list once results come back.
     onToolEvent?: (evt: ToolEvent) => void,
+    // think: lässt ein Denk-Modell seine Gedankenkette laufen (Standard aus).
+    // onThinking: einmaliges Status-Signal, sobald das Modell denkt.
+    // onReasoning: jeder Gedanken-Chunk live — fürs einklappbare
+    // Thinking-Panel über der Antwort. signal: bricht den Stream ab
+    // (Stop-Button); der bereits gestreamte Teil wird vom Backend gespeichert.
+    opts?: { think?: boolean; onThinking?: () => void; onReasoning?: (delta: string) => void; signal?: AbortSignal },
   ): Promise<{ userMessage: Message; assistantMessage: Message }> {
     let res: Response;
     if (attachments.length > 0) {
       const fd = new FormData();
       fd.append('content', content);
       fd.append('aliases', JSON.stringify(attachments.map(a => a.alias)));
+      if (opts?.think !== undefined) fd.append('think', String(opts.think));
       attachments.forEach(a => fd.append('files', a.file, a.file.name));
       res = await fetch(`${BASE}/chats/${chatId}/messages`, {
         method: 'POST',
         body: fd, // KEIN explicit Content-Type — Browser setzt es mit Boundary
+        signal: opts?.signal,
       });
     } else {
       res = await fetch(`${BASE}/chats/${chatId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content, think: opts?.think }),
+        signal: opts?.signal,
       });
     }
 
@@ -111,6 +128,14 @@ export const api = {
 
         // A text delta — pass it to the callback so the UI can append it.
         if (data.delta) onDelta(data.delta);
+
+        // Das Modell hat seine Denk-Phase begonnen (nur bei think=true) —
+        // die UI zeigt dafür die Tipp-/Zitat-Rotation unter den Punkten.
+        if (data.thinking && opts?.onThinking) opts.onThinking();
+
+        // Ein Gedanken-Chunk der laufenden Denk-Phase — streamt live ins
+        // einklappbare Thinking-Panel.
+        if (data.reasoning && opts?.onReasoning) opts.onReasoning(data.reasoning);
 
         // A tool event — the model called a tool (e.g. web_search). The UI
         // uses this for the "Searching…" indicator and the sources list.
@@ -223,6 +248,57 @@ export const api = {
     if (!res.ok && res.status !== 204) throw new Error('Failed to delete highlight');
   },
 
+  // ─── Chat-Text-Highlights (message-anchored, offsets statt Rects) ─────────
+
+  async listMessageHighlights(chatId: string): Promise<MessageHighlight[]> {
+    const res = await fetch(`${BASE}/chats/${chatId}/message-highlights`);
+    if (!res.ok) throw new Error('Failed to fetch message highlights');
+    return res.json();
+  },
+
+  async createMessageHighlight(
+    chatId: string,
+    payload: CreateMessageHighlightPayload,
+  ): Promise<MessageHighlight> {
+    const res = await fetch(`${BASE}/chats/${chatId}/message-highlights`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to create message highlight');
+    }
+    return res.json();
+  },
+
+  async updateMessageHighlight(mhid: string, color: HighlightColor): Promise<MessageHighlight> {
+    const res = await fetch(`${BASE}/message-highlights/${mhid}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to update message highlight');
+    }
+    return res.json();
+  },
+
+  async deleteMessageHighlight(mhid: string): Promise<void> {
+    const res = await fetch(`${BASE}/message-highlights/${mhid}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error('Failed to delete message highlight');
+  },
+
+  // Baum-weite Highlight-Übersicht für den Highlights-Drawer. Nimmt jede
+  // Chat-ID des Baums; das Backend löst selbst zum Root auf und liefert die
+  // vereinte Liste bereits in Dokumentreihenfolge.
+  async listTreeHighlights(chatId: string): Promise<TreeHighlight[]> {
+    const res = await fetch(`${BASE}/chats/${chatId}/tree-highlights`);
+    if (!res.ok) throw new Error('Failed to fetch tree highlights');
+    return res.json();
+  },
+
   // Global per-color labels. Shared across all trees; renaming a color
   // propagates immediately to every open popup via useLabels.
   async getHighlightLabels(): Promise<HighlightLabels> {
@@ -285,10 +361,11 @@ export const api = {
     return res.json();
   },
 
-  // Lists models currently pulled in the user's local Ollama installation.
-  // Returns an empty array if Ollama isn't reachable so the modal can fall back
-  // to free-text input without surfacing an error.
-  async getOllamaModels(): Promise<{ name: string; size?: number; parameter_size?: string }[]> {
+  // Lists vision-capable models currently pulled in the user's local Ollama
+  // installation (the backend filters; `canThink` flags reasoning models).
+  // Returns an empty array if Ollama isn't reachable so the UI can fall back
+  // gracefully without surfacing an error.
+  async getOllamaModels(): Promise<OllamaModelInfo[]> {
     try {
       const res = await fetch(`${BASE}/settings/ollama-models`);
       if (!res.ok) return [];
@@ -296,6 +373,82 @@ export const api = {
       return Array.isArray(data.models) ? data.models : [];
     } catch {
       return [];
+    }
+  },
+
+  // Prefix-Warm-up: lässt das lokale Modell den Chat-Kontext (v. a. den
+  // Paper-Volltext) schon einmal einlesen, bevor der Nutzer fragt — und hält
+  // es 1 h im Speicher. Fire-and-forget beim Öffnen eines Chats und nach
+  // jeder Antwort. Meldet zusätzlich die GPU-Residency des Modells.
+  async warmupChat(chatId: string): Promise<WarmupResult> {
+    const res = await fetch(`${BASE}/chats/${chatId}/messages/warmup`, { method: 'POST' });
+    if (!res.ok) return { warmed: false };
+    return res.json().catch(() => ({ warmed: false }));
+  },
+
+  // Hardware-Fakten + Modell-Empfehlung für diesen Rechner (die "Leiter").
+  async getSystemRecommendation(): Promise<SystemRecommendation> {
+    const res = await fetch(`${BASE}/system/recommendation`);
+    if (!res.ok) throw new Error('Failed to fetch system recommendation');
+    return res.json();
+  },
+
+  // Setzt das empfohlene Modell als aktives, wenn model_source 'auto' ist und
+  // das Modell installiert ist. Wird beim App-Start aufgerufen (Download-Gate).
+  async applyRecommendedModel(): Promise<{ applied: boolean; model: string }> {
+    const res = await fetch(`${BASE}/settings/apply-recommended`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to apply recommended model');
+    return res.json();
+  },
+
+  // Lädt ein Modell über den lokalen Ollama-Daemon herunter und meldet jede
+  // Fortschritts-Zeile (Settings-Bibliothek: Fortschrittsbalken).
+  async pullOllamaModel(
+    model: string,
+    onProgress: (p: PullProgress) => void,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const res = await fetch(`${BASE}/settings/ollama-pull`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model }),
+      signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to download model');
+    }
+    const reader = res.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const p = JSON.parse(line) as PullProgress & { error?: string };
+          if (p.error) throw new Error(p.error);
+          onProgress(p);
+        } catch (err) {
+          if (err instanceof SyntaxError) continue; // halbe Zeile — ignorieren
+          throw err;
+        }
+      }
+    }
+  },
+
+  // Entfernt ein installiertes Ollama-Modell (Settings-Bibliothek).
+  async deleteOllamaModel(name: string): Promise<void> {
+    const res = await fetch(`${BASE}/settings/ollama-models/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.error || 'Failed to remove model');
     }
   },
 

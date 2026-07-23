@@ -45,6 +45,12 @@ export interface ToolEvent {
   result?: { query?: string; results?: SearchSource[]; error?: string } | null;
 }
 
+// Inhalt einer Assistant-Nachricht, deren Antwort per Stop-Button abgebrochen
+// wurde: der Teiltext wird verworfen, nur diese Markierung bleibt (Nutzer-
+// entscheid 2026-07-22). Das Backend (routes/messages.js) schreibt exakt
+// denselben String — MessageBubble rendert ihn als graue "Interrupted"-Zeile.
+export const INTERRUPTED_MARKER = '*Interrupted*';
+
 export interface Message {
   id: string;
   chat_id: string;
@@ -56,11 +62,40 @@ export interface Message {
   // during the streaming session this message was produced in. Populated by
   // the streaming client; lost on page reload.
   sources?: SearchSource[];
+  // Transient (not persisted): wie lange das Modell vor dieser Antwort
+  // nachgedacht hat (nur bei think=on) — rendert die "Thought for Xs"-Zeile.
+  thoughtForSeconds?: number;
+  // Transient (not persisted): die live gestreamte Gedankenkette (nur bei
+  // think=on) — rendert das einklappbare Thinking-Panel über der Antwort.
+  reasoning?: string;
+}
+
+// Antwort des Prefix-Warm-ups. gpu meldet, wie viel des Modells im
+// GPU-Speicher liegt — unter 100 % heißt teilweises CPU-Offloading (langsam).
+export interface WarmupResult {
+  warmed: boolean;
+  gpu?: { vramPercent: number };
 }
 
 export interface ChatDetail extends Chat {
   messages: Message[];
   children: Chat[];
+}
+
+// Ein Knoten auf dem Vorfahren-Pfad (Wurzel → … → direkter Elternchat) des
+// aktiven Branches, wie von GET /chats/:id/ancestors geliefert. summary ist
+// die gecachte LLM-Zusammenfassung — genau der Text, den das Modell als
+// geerbten Kontext bekommt (null, solange noch keine erzeugt wurde).
+export interface ChatAncestor {
+  id: string;
+  title: string;
+  parent_word: string | null;
+  summary: string | null;
+  // Anzeige-Ableitung der Summary fürs Kontext-Banner (Kernaussage +
+  // Stichpunkte, mockup-context-banner-variants.html §01). null bei alten
+  // Summaries oder wenn der Summarizer kein JSON lieferte → das Banner
+  // rendert stattdessen den Summary-Volltext als Markdown.
+  display: { gist: string; points: string[] } | null;
 }
 
 // Ein an einen Chat tree gebundenes PDF (ADR-0002: max. eins pro Tree).
@@ -84,6 +119,16 @@ export const HIGHLIGHT_COLORS: readonly HighlightColor[] = [
   'pink',
   'orange',
 ] as const;
+
+// Fixed product hex values of the five colors (mockup constants). Used where
+// a color has to be applied as an inline style (e.g. the composer quote bar).
+export const HIGHLIGHT_HEX: Record<HighlightColor, string> = {
+  yellow: '#FEF08A',
+  green: '#BBF7D0',
+  blue: '#BFDBFE',
+  pink: '#FBCFE8',
+  orange: '#FED7AA',
+};
 
 // Global per-color labels. User-renamable via the FloatingPopup's edit mode.
 // Stored server-side so they survive reloads.
@@ -136,6 +181,83 @@ export interface CreateHighlightPayload {
   chatId?: string | null;
 }
 
+// ─── Chat-Text-Highlights (mockup-chat-highlights-ask-in-chat.html) ─────────
+// Gleiche fünf Farben und globale Labels wie PDF-Highlights, aber anderer
+// Anker: message_id + Zeichen-Offsets in den gerenderten Klartext der Bubble
+// (textContent) — reflow-sicher, keine Geometrie.
+
+export interface MessageHighlight {
+  id: string;
+  messageId: string;
+  chatId: string;
+  startOffset: number;
+  endOffset: number;
+  text: string;
+  color: HighlightColor;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateMessageHighlightPayload {
+  messageId: string;
+  color: HighlightColor;
+  text: string;
+  startOffset: number;
+  endOffset: number;
+}
+
+// ─── Baum-weite Highlight-Übersicht (mockup-highlights-overview.html) ───────
+// Vereinte Sicht für den Highlights-Drawer: PDF- und Chat-Highlights des
+// ganzen Chat-Baums, vom Backend bereits in Dokumentreihenfolge geliefert
+// (PDF nach Seite, dann Chats in Baum-Reihenfolge).
+
+export interface TreePdfHighlight {
+  kind: 'pdf';
+  id: string;
+  color: HighlightColor;
+  text: string;
+  paperId: string;
+  pageNumber: number;
+  rects: HighlightRect[];
+  chatId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TreeChatHighlight {
+  kind: 'chat';
+  id: string;
+  color: HighlightColor;
+  text: string;
+  chatId: string;
+  chatTitle: string;
+  messageId: string;
+  startOffset: number;
+  endOffset: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type TreeHighlight = TreePdfHighlight | TreeChatHighlight;
+
+// Eine Auswahl in einer Chat-Nachricht (vor dem Speichern) — von
+// MessageBubble beim Rechtsklick erfasst, von App an Popup/Composer gereicht.
+export interface ChatSelection {
+  messageId: string;
+  chatId: string;
+  text: string;
+  startOffset: number;
+  endOffset: number;
+}
+
+// Zitat-Block im Composer ("Ask in chat"). color null = keine Farbe gewählt
+// (neutraler grauer Balken laut Mockup).
+export interface ComposerQuote {
+  text: string;
+  sourceLabel: string;
+  color: HighlightColor | null;
+}
+
 // Ein Treffer der Paper-Suche (GET /api/papers/search) — gemergte Form aus
 // OpenAlex und arXiv (Slice 07). pdf_candidates ist die komplette
 // Mirror-Kette für den Import-Fallback, wenn der Publisher die primäre
@@ -174,7 +296,33 @@ export interface Settings {
   llm_provider: LLMProvider;
   openai_model: string;
   ollama_model: string;
+  // 'auto': die Hardware-Empfehlung darf das Modell setzen.
+  // 'manual': der Nutzer hat selbst gewählt — Automatik bleibt weg.
+  model_source: 'auto' | 'manual';
   openai_api_key_set: boolean;
+}
+
+// Ein lokal installiertes Ollama-Modell, wie es der (vision-gefilterte)
+// Backend-Endpoint liefert. `canThink` steuert die Thinking-Zeile im Picker.
+export interface OllamaModelInfo {
+  name: string;
+  size?: number;
+  parameter_size?: string;
+  canThink?: boolean;
+}
+
+// Hardware-Empfehlung des Backends (GET /api/system/recommendation).
+export interface SystemRecommendation {
+  platform: string;
+  totalMemGb: number;
+  recommendedModel: string;
+}
+
+// Eine Fortschritts-Zeile des Ollama-Downloads (NDJSON-Passthrough).
+export interface PullProgress {
+  status: string;
+  total?: number;
+  completed?: number;
 }
 
 // Updates an die Settings — alle Felder optional (Partial Update).

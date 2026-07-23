@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <!-- Matrix favicon — phosphor tile: black with the branch mark in terminal
+       green, brighter green accent node. Same tile geometry as every theme.
+       Design source: design/mockup-logo-icons.html (Matrix, Favicon-Test) -->
+  <rect x="0.5" y="0.5" width="47" height="47" rx="5" fill="#030503" stroke="#12301A"/>
+  <path d="M8 24 H 22 C 28 24, 29 15, 36 13" stroke="#2BE76B" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <path d="M22 24 C 28 24, 29 33, 36 35" stroke="#2BE76B" stroke-width="5" stroke-linecap="round" fill="none"/>
+  <circle cx="37" cy="12.5" r="6" fill="#8CF5B0"/>
+  <circle cx="37" cy="35.5" r="6" fill="#2BE76B"/>
+</svg>

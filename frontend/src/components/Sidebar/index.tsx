@@ -3,7 +3,8 @@
  *
  * Two-level navigation sidebar with a white background.
  *
- * Default view: flat list of all root chats.
+ * Default view: all root chats, grouped into relative date sections
+ * ("Today", "Yesterday", "This week", …) by created_at.
  * Expanded view: back button + one root chat with all its children.
  *
  * Clicking a root chat expands it and opens it in the chat area.
@@ -13,12 +14,13 @@
  * Hovering shows the full chat title as a native tooltip.
  */
 
-import { useState, useEffect } from 'react';
-import { SquarePen, GitBranch, ArrowLeft, Pencil, Trash2, ChevronDown, FileText, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import { ChatTree, RenameInput } from './ChatTree';
+import { useState, useEffect, useRef } from 'react';
+import { SquarePen, GitBranch, ArrowLeft, Pencil, Trash2, FileText, PanelLeftClose, PanelLeftOpen, Settings as SettingsIcon } from 'lucide-react';
+import { ChatTree, RenameInput, StreamingDots } from './ChatTree';
+import { groupChatsByDate } from './groupChatsByDate';
 import { Logo } from '../Logo';
-import { SettingsModal } from '../SettingsModal';
-import type { Chat, Settings as AppSettings } from '../../types';
+import type { SettingsTab } from '../SettingsModal';
+import type { Chat } from '../../types';
 
 // Recursively look up a chat by id so the delete confirmation can show its title.
 function findChatById(chats: Chat[], id: string): Chat | null {
@@ -49,24 +51,53 @@ interface Props {
   onRename: (id: string, title: string) => void;
   viewMode: 'chat' | 'mindmap';
   onToggleView: () => void;
-  // Current LLM settings — null while still loading. Shown in the footer so the
-  // user always sees which provider/model is active.
-  settings: AppSettings | null;
-  onSettingsChange: (s: AppSettings) => void;
+  // Öffnet das (App-eigene) Settings-Modal auf dem gewünschten Tab. Das
+  // aktive Modell zeigt die Composer-Pille — die Sidebar hat keine
+  // Modell-Box mehr (mockup-model-picker.html, Sektion 01).
+  onOpenSettings: (tab: SettingsTab) => void;
   // Whether the sidebar is collapsed to a slim rail, plus the toggle.
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  // Chats mit laufender Hintergrund-Antwort — ihre Zeilen (bzw. in der
+  // Root-Liste der Baum, der sie enthält) zeigen die animierten Punkte.
+  streamingChatIds?: Set<string>;
 }
 
-export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, onRename, viewMode, onToggleView, settings, onSettingsChange, collapsed, onToggleCollapsed }: Props) {
+// Streamt dieser Chat oder irgendein Nachfahre? (Root-Liste zeigt nur Roots.)
+function subtreeStreams(chat: Chat, ids?: Set<string>): boolean {
+  if (!ids || ids.size === 0) return false;
+  if (ids.has(chat.id)) return true;
+  return (chat.children ?? []).some(c => subtreeStreams(c, ids));
+}
+
+export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, onRename, viewMode, onToggleView, onOpenSettings, collapsed, onToggleCollapsed, streamingChatIds }: Props) {
   const [expandedRootId, setExpandedRootId] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  const openSettings = onOpenSettings;
 
   const expandedRoot = expandedRootId ? chats.find(c => c.id === expandedRootId) ?? null : null;
   const pendingDeleteChat = pendingDeleteId ? findChatById(chats, pendingDeleteId) : null;
+
+  // Nutzer-Report 2026-07-22: Nach dem Erstellen eines neuen Chats (Root wie
+  // Branch) soll die Sidebar direkt dessen Baum zeigen, damit neu erstellte
+  // Kinder sofort sichtbar sind. expandedRootId folgt deshalb dem aktiven
+  // Chat — aber nur EINMAL pro Chat-Wechsel (lastAutoExpandedFor): Baum-
+  // Refreshes (Rename, Streaming-Titel) dürfen ein bewusstes "← All chats"
+  // nicht wieder aufklappen. chats bleibt in den Deps, weil ein frisch
+  // erstellter Chat erst nach dem Tree-Refetch im Baum auftaucht.
+  const lastAutoExpandedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeChatId || lastAutoExpandedFor.current === activeChatId) return;
+    const root = chats.find(
+      (c) => c.id === activeChatId || !!findChatById(c.children ?? [], activeChatId),
+    );
+    if (root) {
+      lastAutoExpandedFor.current = activeChatId;
+      setExpandedRootId(root.id);
+    }
+  }, [activeChatId, chats]);
 
   // Close the context menu on Escape. Outside clicks are handled by the
   // backdrop element rendered below the menu — that's more reliable than a
@@ -119,7 +150,7 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
   // hidden until the user expands the sidebar again.
   if (collapsed) {
     return (
-      <div className="w-12 bg-white border-r border-gray-200 flex flex-col items-center py-5 shrink-0">
+      <div className="syflo-sidebar w-12 bg-white border-r border-gray-200 flex flex-col items-center py-5 shrink-0">
         <button
           onClick={onToggleCollapsed}
           title="Expand sidebar"
@@ -134,15 +165,25 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
         >
           <SquarePen size={16} />
         </button>
+        {/* Settings pinned to the bottom of the rail — same entry point as the
+            expanded sidebar's bottom-left gear */}
+        <button
+          onClick={() => openSettings('appearance')}
+          title="Settings"
+          aria-label="Open settings"
+          className="mt-auto p-2 rounded-lg text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+        >
+          <SettingsIcon size={16} />
+        </button>
       </div>
     );
   }
 
   return (
-    <div className="w-64 bg-white border-r border-gray-200 flex flex-col shrink-0">
+    <div className="syflo-sidebar w-64 bg-white border-r border-gray-200 flex flex-col shrink-0">
       {/* Top bar: app name + action icons */}
       <div className="flex items-center justify-between px-5 py-5 border-b border-gray-100">
-        <Logo width={120} />
+        <Logo />
         <div className="flex items-center gap-2">
           {/* Collapse the sidebar to a slim rail */}
           <button
@@ -179,12 +220,6 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
         </div>
       </div>
 
-      <SettingsModal
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onSaved={onSettingsChange}
-      />
-
       {/* Right-click context menu (rename / delete). Positioned at cursor.
           An invisible full-screen backdrop sits at z-40 to capture outside
           clicks reliably — the menu itself is at z-50, so its button clicks
@@ -209,7 +244,7 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
           </button>
           <button
             onClick={() => { requestDelete(contextMenu.chatId); setContextMenu(null); }}
-            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-red-600 hover:bg-gray-100"
+            className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-100"
           >
             <Trash2 size={13} />
             Delete
@@ -281,93 +316,87 @@ export function Sidebar({ chats, activeChatId, onSelect, onNewChat, onDelete, on
               onContextMenu={openContextMenu}
               onRenameSubmit={handleRenameSubmit}
               onRenameCancel={() => setRenamingId(null)}
+              streamingChatIds={streamingChatIds}
             />
           </>
         ) : (
-          // Default view: flat list of root chats (no children shown)
-          <>
-            <p className="text-[11px] text-gray-400 font-medium px-2.5 pt-2 pb-1 uppercase tracking-wider">Chats</p>
-            <div className="space-y-0.5">
-              {chats.map(chat => {
-                const isActive = chat.id === activeChatId ||
-                  !!(chat.children?.some(c => c.id === activeChatId));
-                const isRenaming = chat.id === renamingId;
-                return (
-                  <div
-                    key={chat.id}
-                    onClick={() => !isRenaming && handleRootClick(chat.id)}
-                    onContextMenu={e => {
-                      e.preventDefault();
-                      openContextMenu(chat.id, e.clientX, e.clientY);
-                    }}
-                    title={isRenaming ? undefined : chat.title}
-                    className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
-                      isActive
-                        ? 'bg-blue-50 text-blue-700'
-                        : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
-                    }`}
-                  >
-                    {isRenaming ? (
-                      <RenameInput
-                        initial={chat.title}
-                        onSubmit={title => handleRenameSubmit(chat.id, title)}
-                        onCancel={() => setRenamingId(null)}
-                      />
-                    ) : (
-                      <span className="flex-1 truncate text-[13px]">{chat.title}</span>
-                    )}
-                    {/* PDF tag on trees with a bound paper — same badge as on
-                        the tree's root node (design/mockup-pdf-layout.html) */}
-                    {!isRenaming && chat.paper_id && (
-                      <span
-                        className="ml-auto shrink-0 inline-flex items-center gap-[3px] text-[10px] font-semibold tracking-wide text-gray-500 bg-gray-50 border border-gray-200 rounded-[5px] px-1.5 py-px"
-                        data-testid="root-list-pdf-tag"
-                      >
-                        <FileText size={9} />
-                        PDF
-                      </span>
-                    )}
-                  </div>
-                );
-              })}
+          // Default view: root chats grouped into relative date sections
+          // ("Today", "Yesterday", …) by created_at; children stay hidden.
+          groupChatsByDate(chats).map((group, groupIndex) => (
+            <div key={group.label}>
+              <p
+                className={`text-[11px] text-gray-400 font-medium px-2.5 pb-1 uppercase tracking-wider ${
+                  groupIndex === 0 ? 'pt-2' : 'pt-5'
+                }`}
+                data-testid="chat-group-label"
+              >
+                {group.label}
+              </p>
+              <div className="space-y-0.5">
+                {group.chats.map(chat => {
+                  const isActive = chat.id === activeChatId ||
+                    !!(chat.children?.some(c => c.id === activeChatId));
+                  const isRenaming = chat.id === renamingId;
+                  return (
+                    <div
+                      key={chat.id}
+                      onClick={() => !isRenaming && handleRootClick(chat.id)}
+                      onContextMenu={e => {
+                        e.preventDefault();
+                        openContextMenu(chat.id, e.clientX, e.clientY);
+                      }}
+                      title={isRenaming ? undefined : chat.title}
+                      className={`flex items-center gap-2.5 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
+                        isActive
+                          ? 'bg-blue-50 text-blue-700'
+                          : 'text-gray-700 hover:bg-gray-100 hover:text-gray-900'
+                      }`}
+                    >
+                      {isRenaming ? (
+                        <RenameInput
+                          initial={chat.title}
+                          onSubmit={title => handleRenameSubmit(chat.id, title)}
+                          onCancel={() => setRenamingId(null)}
+                        />
+                      ) : (
+                        <span className="flex-1 truncate text-[13px]">{chat.title}</span>
+                      )}
+                      {/* Laufende Antwort in diesem Baum (Root oder Kind) */}
+                      {!isRenaming && subtreeStreams(chat, streamingChatIds) && <StreamingDots />}
+                      {/* PDF tag on trees with a bound paper — same badge as on
+                          the tree's root node (design/mockup-pdf-layout.html) */}
+                      {!isRenaming && chat.paper_id && (
+                        <span
+                          className="ml-auto shrink-0 inline-flex items-center gap-[3px] text-[10px] font-semibold tracking-wide text-gray-500 bg-gray-50 border border-gray-200 rounded-[5px] px-1.5 py-px"
+                          data-testid="root-list-pdf-tag"
+                        >
+                          <FileText size={9} />
+                          PDF
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </>
+          ))
         )}
       </div>
 
-      {/* Footer: active-model picker pinned to the bottom.
-          Looks like a dropdown so the user immediately reads it as
-          "this is what's running — click to change", not as passive status. */}
-      {settings && (
-        <div className="border-t border-gray-100 px-3 py-3">
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider px-1 mb-1.5">
-            Active model
-          </p>
-          <button
-            onClick={() => setSettingsOpen(true)}
-            title="Change model"
-            aria-label="Change active model"
-            className="group flex items-center gap-2 w-full px-3 py-2 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 hover:border-gray-300 transition-colors text-left"
-          >
-            <span
-              className={`w-2 h-2 rounded-full shrink-0 ${
-                settings.llm_provider === 'ollama' ? 'bg-green-500' : 'bg-blue-500'
-              }`}
-              aria-hidden="true"
-            />
-            <span className="flex-1 min-w-0 text-sm">
-              <span className="font-medium text-gray-800">
-                {settings.llm_provider === 'ollama' ? 'Ollama' : 'OpenAI'}
-              </span>
-              <span className="text-gray-500"> · </span>
-              <span className="text-gray-500 truncate">
-                {settings.llm_provider === 'ollama' ? settings.ollama_model : settings.openai_model}
-              </span>
-            </span>
-            <ChevronDown size={14} className="text-gray-400 group-hover:text-gray-600 shrink-0" />
-          </button>
-        </div>
-      )}
+      {/* Footer: nur noch das Zahnrad (mockup-model-picker.html, Sektion 01) —
+          das aktive Modell zeigt die Composer-Pille, der Provider-Status lebt
+          in deren Menü-Fußzeile. */}
+      <div className="border-t border-gray-100 px-3 py-3">
+        <button
+          onClick={() => openSettings('appearance')}
+          title="Settings"
+          aria-label="Open settings"
+          className="flex items-center gap-2 px-2 py-1.5 rounded-lg text-xs font-medium text-gray-500 hover:text-gray-900 hover:bg-gray-100 transition-colors"
+        >
+          <SettingsIcon size={15} />
+          Settings
+        </button>
+      </div>
     </div>
   );
 }

@@ -197,6 +197,9 @@ module.exports = (db, uploadsDir, options = {}) => {
     VALUES (@id, @title, @authors_json, @uploaded_at, @pdf_path, @status)
   `);
   const bindPaperToChat = db.prepare('UPDATE chats SET paper_id = ? WHERE id = ?');
+  // Binding a paper names the tree after it — the sidebar entry should read
+  // as the paper, not as "New chat" (one PDF per tree, so this fires once).
+  const renameChatToPaper = db.prepare('UPDATE chats SET title = ? WHERE id = ?');
 
   // Walk parent_id up to the tree root. The root carries the tree's paper_id.
   function resolveRoot(chatId) {
@@ -252,6 +255,7 @@ module.exports = (db, uploadsDir, options = {}) => {
     };
     insertPaper.run(row);
     bindPaperToChat.run(row.id, root.id);
+    renameChatToPaper.run(row.title, root.id);
     return res.status(201).json(formatPaper(row));
   });
 
@@ -459,6 +463,7 @@ module.exports = (db, uploadsDir, options = {}) => {
     const tx = db.transaction(() => {
       insertPaper.run(row);
       bindPaperToChat.run(row.id, root.id);
+      renameChatToPaper.run(row.title, root.id);
     });
     tx();
 

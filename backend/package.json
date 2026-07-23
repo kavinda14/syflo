@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "NODE_OPTIONS=--experimental-vm-modules jest tests/"
+    "test": "NODE_OPTIONS=--experimental-vm-modules jest tests/",
+    "bench": "node scripts/benchmark.js"
   },
   "keywords": [],
   "author": "",

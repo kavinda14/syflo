@@ -11,6 +11,17 @@ mkdir -p "$LOG_DIR"
 
 cd "$SYFLO_DIR"
 
+# Ein Wert für alle: Ollama nutzt ihn als Kontextfenster, das Backend leitet
+# daraus sein Zeichen-Budget für den System-Kontext ab (ancestor-context.js).
+# Exportiert, damit BEIDE Prozesse denselben Wert sehen — ein Backend-Budget
+# über dem Ollama-Fenster hieße stilles Context-Shifting und toten KV-Cache.
+export OLLAMA_CONTEXT_LENGTH=16384
+
+# Kein OLLAMA_NUM_PARALLEL: Ollama erzwingt bei Vision-Modellen (unsere
+# ganze Leiter) Parallel:1 — es gibt genau EINEN KV-Cache-Slot. Deshalb
+# teilen sich alle Nebenaufrufe (Titel-Generierung) den Prompt-Prefix des
+# Gesprächs (messages.js), statt den teuren Paper-Prefill zu verdrängen.
+
 echo "🚀 Syflo wird gestartet..."
 echo ""
 
@@ -110,16 +121,42 @@ else
     exit 1
   fi
   echo "Starte Ollama..."
-  # 16k Kontextfenster statt der 4096-Default: der Chat bekommt den Volltext
-  # des angehängten Papers (bis ~40k Zeichen ≈ 10k Tokens) in den System-
-  # Prompt — mit 4096 würde Ollama den Paper-Text stillschweigend abschneiden.
-  OLLAMA_CONTEXT_LENGTH=16384 ollama serve >"$LOG_DIR/ollama.log" 2>&1 &
+  # Kontextfenster statt der 4096-Default: der Chat bekommt den Volltext des
+  # angehängten Papers in den System-Prompt — mit 4096 würde Ollama den
+  # Paper-Text stillschweigend abschneiden. Wert: export oben im Skript.
+  ollama serve >"$LOG_DIR/ollama.log" 2>&1 &
   OLLAMA_PID=$!
   if wait_for http://localhost:11434/api/tags 20; then
     echo "Ollama bereit"
   else
     echo "Ollama antwortet nicht (siehe $LOG_DIR/ollama.log)"
   fi
+fi
+
+# 1.5 SearXNG (Web-Suche im Chat) — best effort: ohne laufenden Container
+# stirbt die web_search-Funktion still (das Modell bekommt nur einen Fehler-
+# String). Keine Container-Laufzeit ist NICHT fatal — der Chat läuft weiter,
+# nur ohne Web-Suche. Port 8890, siehe searxng/docker-compose.yml.
+# Laufzeit ist Colima (Entscheidung 2026-07-22): schlanke VM (~1 GB Deckel)
+# statt Docker Desktop, Autostart über `brew services start colima`. Der
+# colima-start hier ist nur das Sicherheitsnetz, falls der Dienst aus ist.
+if curl -s -m 2 http://localhost:8890/ >/dev/null 2>&1; then
+  echo "SearXNG läuft bereits"
+elif command -v docker >/dev/null 2>&1; then
+  if ! docker info >/dev/null 2>&1 && command -v colima >/dev/null 2>&1; then
+    echo "Starte Colima..."
+    colima start >"$LOG_DIR/colima.log" 2>&1 || true
+  fi
+  if docker info >/dev/null 2>&1; then
+    echo "Starte SearXNG (Port 8890)..."
+    docker compose -f "$SYFLO_DIR/searxng/docker-compose.yml" up -d >"$LOG_DIR/searxng.log" 2>&1 \
+      && echo "SearXNG bereit" \
+      || echo "SearXNG konnte nicht starten (siehe $LOG_DIR/searxng.log) — Web-Suche deaktiviert"
+  else
+    echo "Keine Container-Laufzeit erreichbar (colima start fehlgeschlagen?) — Web-Suche deaktiviert"
+  fi
+else
+  echo "Docker-CLI ist nicht installiert — Web-Suche im Chat ist deaktiviert"
 fi
 
 # 2. Backend

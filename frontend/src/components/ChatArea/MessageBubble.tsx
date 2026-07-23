@@ -11,10 +11,27 @@
  * to that child chat.
  */
 
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
+import { Brain, ChevronDown, ChevronRight, Clock, Square } from 'lucide-react';
 import { ThinkingIndicator } from './ThinkingIndicator';
-import type { Message } from '../../types';
+import {
+  clearFlashChatRange,
+  clearMessageHighlights,
+  clearPendingChatSelection,
+  highlightAtPoint,
+  paintFlashChatRange,
+  paintMessageHighlights,
+  paintPendingChatSelection,
+  textOffsetInRoot,
+} from '../../chat/highlightAnchors';
+import { splitLeadingQuote } from '../../chat/messageQuote';
+import { INTERRUPTED_MARKER } from '../../types';
+import type { ChatSelection, HighlightColor, Message, MessageHighlight } from '../../types';
 
 // ReactMarkdown's defaultUrlTransform strips URLs with unknown schemes (anything
 // besides http, https, mailto, tel) for safety. Our internal "branch:<chatId>"
@@ -34,6 +51,36 @@ interface Props {
   onWordRightClick: (word: string, context: string, x: number, y: number) => void;
   branchWords?: BranchWord[];
   onBranchClick?: (chatId: string) => void;
+  // Persistent chat-text highlights of the whole chat; this bubble paints the
+  // ones anchored to its own message (mockup-chat-highlights-ask-in-chat.html).
+  highlights?: MessageHighlight[];
+  // Right-click with a live text selection inside this bubble. The selection
+  // carries character offsets into the bubble's rendered plain text.
+  onChatSelection?: (sel: ChatSelection, context: string, x: number, y: number) => void;
+  // Right-click on an existing highlight (without a live selection) — opens
+  // the recolor/delete menu, same gesture as clicking a PDF highlight.
+  // Left-clicking a highlight opens the same menu (parity with the PDF).
+  onHighlightContextMenu?: (highlight: MessageHighlight, x: number, y: number) => void;
+  // Die beim Rechtsklick erfasste Auswahl, solange das Popup offen ist —
+  // wird als Pending-Overlay weitergemalt, weil die native Selektion beim
+  // Klick ins Popup kollabiert. Nur die besitzende Nachricht malt.
+  pendingSelection?: ChatSelection | null;
+  // Beim Warten auf das erste Token rotiert unter den Lade-Punkten die
+  // Tipp-/Zitat-Zeile — unabhängig vom Thinking-Modus, denn auch die
+  // Prompt-Verarbeitung großer Paper dauert spürbar (Nutzerentscheid
+  // 2026-07-21; mockup-model-picker.html, Sektion 04).
+  showThinkingTips?: boolean;
+  // Sprung-Flash aus dem Highlights-Drawer: blinkt die Markierung selbst an
+  // (nicht die Bubble), in ihrer Highlight-Farbe (wie beim PDF). ChatArea
+  // taktet das Blinken, hier wird nur gemalt.
+  flashRange?: { startOffset: number; endOffset: number; color: HighlightColor } | null;
+}
+
+// "Thought for 1m 42s" / "Thought for 34s".
+function formatThoughtDuration(seconds: number): string {
+  const s = Math.max(1, Math.round(seconds));
+  if (s < 60) return `${s}s`;
+  return `${Math.floor(s / 60)}m ${s % 60}s`;
 }
 
 // Escape special regex characters in a string.
@@ -53,10 +100,224 @@ function insertBranchLinks(content: string, branchWords: BranchWord[]): string {
   return result;
 }
 
-export function MessageBubble({ message, isStreaming, onWordRightClick, branchWords, onBranchClick }: Props) {
+// Modelle schreiben LaTeX teils als \(...\)/\[...\] — remark-math versteht
+// nur die Dollar-Syntax. Vor dem Rendern beide Varianten normalisieren.
+// Außerdem: Inline-Formeln mit Display-Absicht (\displaystyle, Umgebungen wie
+// matrix/aligned) auf eine eigene Display-Zeile befördern — inline gequetscht
+// kollidieren die hohen Konstrukte mit den Nachbarzeilen (Report 2026-07-22).
+const DISPLAY_INTENT = /\\displaystyle|\\begin\{/;
+export function normalizeMathDelimiters(content: string): string {
+  return content
+    .replace(/\\\[([\s\S]+?)\\\]/g, (_, expr) => `\n$$\n${expr}\n$$\n`)
+    .replace(/\\\(([\s\S]+?)\\\)/g, (_, expr) => `$${expr}$`)
+    .replace(/\$([^$\n]+)\$/g, (m, expr) =>
+      DISPLAY_INTENT.test(expr) ? `\n$$\n${expr}\n$$\n` : m,
+    );
+}
+
+export function MessageBubble({
+  message,
+  isStreaming,
+  onWordRightClick,
+  branchWords,
+  onBranchClick,
+  highlights,
+  onChatSelection,
+  onHighlightContextMenu,
+  pendingSelection,
+  showThinkingTips,
+  flashRange,
+}: Props) {
   const isUser = message.role === 'user';
+  const isInterrupted =
+    message.role === 'assistant' && message.content.trim() === INTERRUPTED_MARKER;
+
+  // Root around the rendered message text — the coordinate system for
+  // highlight offsets. Excludes streaming indicator and sources list.
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Thinking-Panel: null = Automatik (offen, solange die Gedankenkette
+  // streamt und noch keine Antwort da ist; zu, sobald die Antwort beginnt).
+  // Ein Klick des Nutzers überstimmt die Automatik dauerhaft.
+  const [thinkingOpenChoice, setThinkingOpenChoice] = useState<boolean | null>(null);
+  const reasoningStreaming = Boolean(isStreaming && message.reasoning && !message.content);
+  const thinkingOpen = thinkingOpenChoice ?? reasoningStreaming;
+
+  // (Re)paint this message's highlights after EVERY commit — deliberately no
+  // dependency array. Re-renders can rebuild the markdown DOM without
+  // message.content changing (e.g. branchWords arriving after the tree loads
+  // → insertBranchLinks rewrites the rendered tree); the previously painted
+  // ranges then hang on detached text nodes and silently collapse. Painting
+  // is idempotent and cheap (one TreeWalker over this bubble). Skipped while
+  // streaming — the text nodes churn on every delta; the final paint happens
+  // once the stream settles.
+  useLayoutEffect(() => {
+    if (isStreaming) return;
+    const root = contentRef.current;
+    if (!root) return;
+    if (highlights) paintMessageHighlights(message.id, root, highlights);
+    // Pending-Selektion des offenen Popups: der Besitzer malt sie bei jedem
+    // Commit neu, alle anderen räumen nur ihre frühere Besitzerschaft auf.
+    paintPendingChatSelection(
+      message.id,
+      root,
+      pendingSelection?.messageId === message.id ? pendingSelection : null,
+    );
+    // Nach den Farb-Stilen malen, damit der Flash sie sicher überdeckt.
+    paintFlashChatRange(message.id, root, flashRange ?? null);
+  });
+  useEffect(() => () => {
+    clearMessageHighlights(message.id);
+    clearPendingChatSelection(message.id);
+    clearFlashChatRange(message.id);
+  }, [message.id]);
+
+  // Pre-process content: branch word links einbetten, LaTeX-Trenner
+  // normalisieren. Muss VOR dem isUser-Early-Return stehen (Hook-Regeln).
+  const linkedContent = branchWords && branchWords.length > 0 && message.content
+    ? insertBranchLinks(message.content, branchWords)
+    : message.content;
+  const processedContent = linkedContent ? normalizeMathDelimiters(linkedContent) : linkedContent;
+
+  // onBranchClick über eine Ref in den memoizten Baum reichen — der Baum
+  // wird nur bei Inhaltsänderung neu erzeugt, der Handler bleibt aktuell.
+  const onBranchClickRef = useRef(onBranchClick);
+  onBranchClickRef.current = onBranchClick;
+
+  // Den gerenderten Markdown-Baum pro Inhalt memoizen (Nutzer-Report
+  // 2026-07-22, 3. Runde): Ohne Memo re-parst ReactMarkdown bei JEDEM
+  // Commit — auch fremden (Popup auf/zu, Drawer-Toggle, Hintergrund-Stream)
+  // — und ersetzt dabei die Textknoten der Bubble. Jede live Textauswahl
+  // des Nutzers starb dadurch beim nächsten Commit. Mit stabiler
+  // Element-Referenz überspringt React den Teilbaum komplett: der DOM (und
+  // damit die Selektion) bleibt stehen, bis sich der INHALT ändert.
+  const markdownTree = useMemo(() => {
+    if (isUser || !processedContent) return null;
+    return (
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkMath]}
+        rehypePlugins={[rehypeKatex]}
+        urlTransform={urlTransform}
+        components={{
+          // Branch links: rendered as blue underlined buttons (not real <a> tags).
+          a({ href, children }) {
+            if (href?.startsWith('branch:')) {
+              const chatId = href.replace('branch:', '');
+              return (
+                <button
+                  onClick={() => onBranchClickRef.current?.(chatId)}
+                  className="text-blue-600 underline underline-offset-2 hover:text-blue-800 font-medium cursor-pointer"
+                >
+                  {children}
+                </button>
+              );
+            }
+            return <a href={href}>{String(children)}</a>;
+          },
+          code({ className, children, ...props }: any) {
+            const isBlock = className?.includes('language-');
+            if (isBlock) {
+              return (
+                <pre className="bg-gray-950 text-gray-100 rounded-xl p-4 overflow-x-auto text-xs my-3">
+                  <code {...props}>{children}</code>
+                </pre>
+              );
+            }
+            return (
+              <code className="bg-gray-100 text-gray-800 px-1.5 py-0.5 rounded text-xs font-mono" {...props}>
+                {children}
+              </code>
+            );
+          },
+          p({ children }) {
+            return <p className="mb-3 last:mb-0">{children}</p>;
+          },
+          ul({ children }) {
+            return (
+              <ul className="list-disc list-outside pl-6 mb-3 space-y-1 marker:text-gray-400 [&_ul]:list-[circle] [&_ul_ul]:list-[square]">
+                {children}
+              </ul>
+            );
+          },
+          ol({ children }) {
+            return (
+              <ol className="list-decimal list-outside pl-6 mb-3 space-y-1 marker:text-gray-400 [&_ol]:list-[lower-alpha] [&_ol_ol]:list-[lower-roman]">
+                {children}
+              </ol>
+            );
+          },
+          li({ children }) {
+            return (
+              <li className="pl-1 leading-relaxed [&>ul]:mt-1 [&>ul]:mb-0 [&>ol]:mt-1 [&>ol]:mb-0">
+                {children}
+              </li>
+            );
+          },
+          h1({ children }) { return <h1 className="text-lg font-bold mb-2 mt-4">{children}</h1>; },
+          h2({ children }) { return <h2 className="text-base font-bold mb-2 mt-3">{children}</h2>; },
+          h3({ children }) { return <h3 className="text-sm font-bold mb-1 mt-2">{children}</h3>; },
+          blockquote({ children }) {
+            return <blockquote className="border-l-4 border-gray-200 pl-4 text-gray-500 my-2">{children}</blockquote>;
+          },
+        }}
+      >
+        {processedContent}
+      </ReactMarkdown>
+    );
+  }, [isUser, processedContent]);
 
   const handleContextMenu = (e: React.MouseEvent) => {
+    const root = contentRef.current;
+    if (root) {
+      // 1) Live selection inside this bubble → selection popup with the
+      //    color row + "Ask in chat" (same gesture as the PDF).
+      if (onChatSelection) {
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+          const range = selection.getRangeAt(0);
+          if (root.contains(range.startContainer) && root.contains(range.endContainer)) {
+            const raw = range.toString();
+            const text = raw.trim();
+            if (text) {
+              e.preventDefault();
+              // Shift the offsets past any selected leading/trailing
+              // whitespace so they frame exactly the trimmed quote.
+              const leading = raw.length - raw.trimStart().length;
+              const trailing = raw.length - raw.trimEnd().length;
+              const start = textOffsetInRoot(root, range.startContainer, range.startOffset);
+              const end = textOffsetInRoot(root, range.endContainer, range.endOffset);
+              onChatSelection(
+                {
+                  messageId: message.id,
+                  chatId: message.chat_id,
+                  text,
+                  startOffset: start + leading,
+                  endOffset: end - trailing,
+                },
+                message.content,
+                e.clientX,
+                e.clientY,
+              );
+              return;
+            }
+          }
+        }
+      }
+      // 2) No selection, but the click landed on an existing highlight →
+      //    recolor/delete menu.
+      if (onHighlightContextMenu && highlights && highlights.length > 0) {
+        const mine = highlights.filter((h) => h.messageId === message.id);
+        const hit = highlightAtPoint(root, mine, e.clientX, e.clientY);
+        if (hit) {
+          e.preventDefault();
+          onHighlightContextMenu(hit, e.clientX, e.clientY);
+          return;
+        }
+      }
+    }
+    // 3) Fallback: definition lookup — assistant messages only (unchanged
+    //    behavior; the selection branch above only handles bubbles wired for
+    //    chat highlighting).
     if (isUser) return;
     e.preventDefault();
     const selection = window.getSelection()?.toString().trim();
@@ -64,6 +325,21 @@ export function MessageBubble({ message, isStreaming, onWordRightClick, branchWo
     if (word) {
       onWordRightClick(word, message.content, e.clientX, e.clientY);
     }
+  };
+
+  // Left-click on an existing highlight opens the recolor/delete menu — the
+  // same gesture as clicking a colored highlight in the PDF. Clicks that are
+  // part of a text selection or land on links/buttons pass through untouched.
+  const handleClick = (e: React.MouseEvent) => {
+    if (!onHighlightContextMenu || !highlights || highlights.length === 0) return;
+    const root = contentRef.current;
+    if (!root) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return;
+    if ((e.target as HTMLElement).closest('a, button')) return;
+    const mine = highlights.filter((h) => h.messageId === message.id);
+    const hit = highlightAtPoint(root, mine, e.clientX, e.clientY);
+    if (hit) onHighlightContextMenu(hit, e.clientX, e.clientY);
   };
 
   // User messages: gray bubble, right-aligned.
@@ -106,109 +382,120 @@ export function MessageBubble({ message, isStreaming, onWordRightClick, branchWo
               ))}
             </div>
           )}
-          {message.content && (
-            <div
-              className="bg-gray-100 text-gray-900 select-text"
-              style={{
-                borderRadius: '2rem',
-                padding: '0.75rem 1.125rem',
-                lineHeight: 1.65,
-                fontSize: '15px',
-              }}
-            >
-              <p className="whitespace-pre-wrap">{message.content}</p>
-            </div>
-          )}
+          {message.content && (() => {
+            const { quote, rest } = splitLeadingQuote(message.content);
+            return (
+              <div
+                onContextMenu={handleContextMenu}
+                onClick={handleClick}
+                className="bg-gray-100 text-gray-900 select-text"
+                style={{
+                  borderRadius: '2rem',
+                  padding: '0.75rem 1.125rem',
+                  lineHeight: 1.65,
+                  fontSize: '15px',
+                }}
+              >
+                <div ref={contentRef} data-chat-content>
+                  {quote !== null && (
+                    // currentColor + Opazität statt fester Grautöne: die
+                    // Themes färben die User-Bubble beliebig um (Matrix dunkel,
+                    // Mushroom rot, …) — absolute Grays wurden dort unlesbar
+                    // (Nutzer-Report 2026-07-22). So bleibt das Zitat immer
+                    // eine gedimmte Variante der Bubble-Textfarbe: lesbar auf
+                    // jedem Grund, aber klar von der Frage unterscheidbar.
+                    <div
+                      className="mb-2 border-l-2 border-current pl-3 text-sm whitespace-pre-wrap opacity-75"
+                      data-testid="user-message-quote"
+                    >
+                      {quote}
+                    </div>
+                  )}
+                  <p className="whitespace-pre-wrap">{quote !== null ? rest : message.content}</p>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       </div>
     );
   }
 
-  // Pre-process content to embed branch word links if any are provided.
-  const processedContent = branchWords && branchWords.length > 0 && message.content
-    ? insertBranchLinks(message.content, branchWords)
-    : message.content;
-
   // Assistant messages: left-aligned on the white chat background.
   return (
-    <div className="flex items-start">
+    <div className="flex flex-col items-start">
+      {/* Einklappbares Thinking-Panel: die live gestreamte Gedankenkette.
+          Automatik: offen während der Denk-Phase, klappt beim ersten
+          Antwort-Token zu — die Wartezeit fühlt sich so deutlich kürzer an. */}
+      {message.reasoning && (
+        <div className="mb-1 w-full" style={{ maxWidth: '46rem' }}>
+          <button
+            type="button"
+            data-testid="thinking-toggle"
+            aria-expanded={thinkingOpen}
+            onClick={() => setThinkingOpenChoice(!thinkingOpen)}
+            className="flex items-center gap-1.5 text-[12px] font-medium text-gray-400 hover:text-gray-600 transition-colors"
+          >
+            <Brain size={12} className="shrink-0" />
+            {reasoningStreaming
+              ? 'Thinking…'
+              : message.thoughtForSeconds !== undefined
+                ? `Thought for ${formatThoughtDuration(message.thoughtForSeconds)}`
+                : 'Thoughts'}
+            {thinkingOpen
+              ? <ChevronDown size={12} className="shrink-0" />
+              : <ChevronRight size={12} className="shrink-0" />}
+          </button>
+          {thinkingOpen && (
+            <div
+              data-testid="thinking-panel"
+              className="mt-1.5 border-l-2 border-gray-200 pl-3 text-[12.5px] leading-relaxed text-gray-500 whitespace-pre-wrap"
+            >
+              {message.reasoning}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* "Thought for Xs" — eingeklappte Zeile über der Antwort, wenn das
+          Modell nachgedacht hat, die Gedankenkette aber nicht (mehr) vorliegt
+          (z. B. nach einem Reload der Nachricht). */}
+      {message.thoughtForSeconds !== undefined && !isStreaming && !message.reasoning && (
+        <div
+          data-testid="thought-for-line"
+          className="mb-1 flex items-center gap-1.5 text-[12px] font-medium text-gray-400"
+        >
+          <Clock size={12} className="shrink-0" />
+          Thought for {formatThoughtDuration(message.thoughtForSeconds)}
+        </div>
+      )}
       <div
         onContextMenu={handleContextMenu}
+        onClick={handleClick}
         className="max-w-none py-1 text-sm leading-relaxed select-text cursor-text prose prose-sm"
         style={{ maxWidth: '46rem' }}
       >
-        {processedContent ? (
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
-            urlTransform={urlTransform}
-            components={{
-              // Branch links: rendered as blue underlined buttons (not real <a> tags).
-              a({ href, children }) {
-                if (href?.startsWith('branch:') && onBranchClick) {
-                  const chatId = href.replace('branch:', '');
-                  return (
-                    <button
-                      onClick={() => onBranchClick(chatId)}
-                      className="text-blue-600 underline underline-offset-2 hover:text-blue-800 font-medium cursor-pointer"
-                    >
-                      {children}
-                    </button>
-                  );
-                }
-                return <a href={href}>{String(children)}</a>;
-              },
-              code({ className, children, ...props }: any) {
-                const isBlock = className?.includes('language-');
-                if (isBlock) {
-                  return (
-                    <pre className="bg-gray-950 text-gray-100 rounded-xl p-4 overflow-x-auto text-xs my-3">
-                      <code {...props}>{children}</code>
-                    </pre>
-                  );
-                }
-                return (
-                  <code className="bg-gray-100 text-gray-800 px-1.5 py-0.5 rounded text-xs font-mono" {...props}>
-                    {children}
-                  </code>
-                );
-              },
-              p({ children }) {
-                return <p className="mb-3 last:mb-0">{children}</p>;
-              },
-              ul({ children }) {
-                return (
-                  <ul className="list-disc list-outside pl-6 mb-3 space-y-1 marker:text-gray-400 [&_ul]:list-[circle] [&_ul_ul]:list-[square]">
-                    {children}
-                  </ul>
-                );
-              },
-              ol({ children }) {
-                return (
-                  <ol className="list-decimal list-outside pl-6 mb-3 space-y-1 marker:text-gray-400 [&_ol]:list-[lower-alpha] [&_ol_ol]:list-[lower-roman]">
-                    {children}
-                  </ol>
-                );
-              },
-              li({ children }) {
-                return (
-                  <li className="pl-1 leading-relaxed [&>ul]:mt-1 [&>ul]:mb-0 [&>ol]:mt-1 [&>ol]:mb-0">
-                    {children}
-                  </li>
-                );
-              },
-              h1({ children }) { return <h1 className="text-lg font-bold mb-2 mt-4">{children}</h1>; },
-              h2({ children }) { return <h2 className="text-base font-bold mb-2 mt-3">{children}</h2>; },
-              h3({ children }) { return <h3 className="text-sm font-bold mb-1 mt-2">{children}</h3>; },
-              blockquote({ children }) {
-                return <blockquote className="border-l-4 border-gray-200 pl-4 text-gray-500 my-2">{children}</blockquote>;
-              },
-            }}
+        {isInterrupted ? (
+          // Stop-Button: die angefangene Antwort wird verworfen; an ihrer
+          // Stelle steht nur diese Markierung (Nutzerentscheid 2026-07-22).
+          <div
+            data-testid="interrupted-note"
+            className="flex items-center gap-1.5 text-[12.5px] italic text-gray-400"
           >
-            {processedContent}
-          </ReactMarkdown>
+            <Square size={9} fill="currentColor" strokeWidth={0} className="shrink-0" />
+            Interrupted
+          </div>
+        ) : markdownTree ? (
+          <div ref={contentRef} data-chat-content>
+            {markdownTree}
+          </div>
         ) : null}
 
-        {isStreaming && !processedContent && <ThinkingIndicator />}
+        {/* Läuft die Gedankenkette sichtbar im Panel, wären die Tipps darunter
+            doppelt — dann nur die Punkte. */}
+        {isStreaming && !processedContent && (
+          <ThinkingIndicator withTips={Boolean(showThinkingTips) && !message.reasoning} />
+        )}
 
         {isStreaming && processedContent && (
           <span className="inline-block w-2 h-4 bg-gray-400 animate-pulse rounded-sm ml-0.5" />

@@ -1,140 +1,184 @@
-interface LogoProps {
-  width?: number;
-  textColor?: string;
-  className?: string;
-  animate?: boolean;
+/**
+ * Logo.tsx
+ *
+ * Theme-aware Syflo logo for the sidebar header. Every theme shares the same
+ * core idea — the "branch mark", one stream forking into two nodes, Syflo's
+ * branching chat trees as a sign — but renders it in its own material:
+ * sticker ink (Ink Blue), pixels (Mushroom Kingdom), engraving (Hyrule),
+ * phosphor terminal (Matrix), flat (Basic, theme id "professional").
+ *
+ * Design source of truth: design/mockup-logo-themes.html (the sidebar-header
+ * cells). Colors and fonts here are the fixed brand constants of each theme's
+ * logo — intentionally hardcoded, not the semantic UI tokens.
+ */
+import { useSyncExternalStore } from 'react';
+import type { ThemeId } from '../theme';
+
+// The theme lives as a `data-theme` attribute on <html> (see theme.ts), so a
+// MutationObserver is the change signal — no prop drilling from SettingsModal.
+function subscribeToTheme(onChange: () => void): () => void {
+  const observer = new MutationObserver(onChange);
+  observer.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['data-theme'],
+  });
+  return () => observer.disconnect();
 }
 
-export function Logo({
-  width = 128,
-  textColor = '#1a1a1a',
-  className,
-  animate = true,
-}: LogoProps) {
-  const height = Math.round((width * 140) / 360);
-  return (
-    <svg
-      width={width}
-      height={height}
-      viewBox="0 0 360 140"
-      className={className}
-      aria-label="Syflo"
-      role="img"
-    >
-      <defs>
-        <linearGradient id="syflo-logo-grad" x1="0" x2="1">
-          <stop offset="0%" stopColor="#3B82F6">
-            {animate && (
-              <animate
-                attributeName="stop-color"
-                values="#3B82F6;#1FB6A6;#34D399;#3B82F6"
-                dur="6s"
-                repeatCount="indefinite"
-              />
-            )}
-          </stop>
-          <stop offset="50%" stopColor="#1FB6A6">
-            {animate && (
-              <animate
-                attributeName="stop-color"
-                values="#1FB6A6;#34D399;#3B82F6;#1FB6A6"
-                dur="6s"
-                repeatCount="indefinite"
-              />
-            )}
-          </stop>
-          <stop offset="100%" stopColor="#34D399">
-            {animate && (
-              <animate
-                attributeName="stop-color"
-                values="#34D399;#3B82F6;#1FB6A6;#34D399"
-                dur="6s"
-                repeatCount="indefinite"
-              />
-            )}
-          </stop>
-        </linearGradient>
-      </defs>
-      {animate && (
-        <style>{`
-          @keyframes syflo-draw {
-            from { stroke-dashoffset: 600; }
-            to   { stroke-dashoffset: 0; }
-          }
-          @keyframes syflo-wave-top {
-            0%, 100% { transform: translateY(0); }
-            50%      { transform: translateY(-2px); }
-          }
-          @keyframes syflo-wave-bot {
-            0%, 100% { transform: translateY(0); }
-            50%      { transform: translateY(2px); }
-          }
-          @keyframes syflo-text-in {
-            from { opacity: 0; transform: translateY(4px); }
-            to   { opacity: 1; transform: translateY(0); }
-          }
-          .ft-wave {
-            stroke-dasharray: 600;
-            stroke-dashoffset: 600;
-            transform-origin: center;
-            transform-box: fill-box;
-            animation:
-              syflo-draw 1.2s ease-out forwards,
-              syflo-wave-top 3.2s ease-in-out 1.2s infinite;
-          }
-          .ft-wave--bot {
-            animation:
-              syflo-draw 1.2s ease-out 0.25s forwards,
-              syflo-wave-bot 3.2s ease-in-out 1.45s infinite;
-          }
-          .ft-text {
-            transform-origin: center;
-            transform-box: fill-box;
-            opacity: 0;
-            animation: syflo-text-in 0.6s ease-out 0.6s forwards;
-          }
-          @media (prefers-reduced-motion: reduce) {
-            .ft-wave, .ft-wave--bot {
-              stroke-dasharray: none;
-              stroke-dashoffset: 0;
-              animation: none;
-            }
-            .ft-text { opacity: 1; animation: none; }
-          }
-        `}</style>
-      )}
-      <path
-        className={animate ? 'ft-wave' : undefined}
-        d="M 38 30 Q 90 14, 140 28 T 240 26 T 322 30"
-        stroke="url(#syflo-logo-grad)"
-        strokeWidth="4"
-        strokeLinecap="round"
-        fill="none"
-      />
-      <text
-        className={animate ? 'ft-text' : undefined}
-        x="180"
-        y="88"
-        textAnchor="middle"
+function readTheme(): ThemeId {
+  return (document.documentElement.dataset.theme as ThemeId | undefined) ?? 'professional';
+}
+
+const VARIANTS: Record<ThemeId, React.ReactNode> = {
+  professional: (
+    <>
+      <span
         style={{
-          fontFamily:
-            '-apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif',
+          width: 18,
+          height: 18,
+          borderRadius: 5,
+          background: '#2563EB',
+          display: 'inline-grid',
+          placeItems: 'center',
+          flexShrink: 0,
+        }}
+      >
+        <svg width="12" height="12" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+          <path d="M8 24 H 22 C 28 24, 29 15, 36 13" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" />
+          <path d="M22 24 C 28 24, 29 33, 36 35" stroke="#FFFFFF" strokeWidth="6" strokeLinecap="round" />
+          <circle cx="38" cy="12.5" r="6.5" fill="#FFFFFF" />
+          <circle cx="38" cy="35.5" r="6.5" fill="#FFFFFF" />
+        </svg>
+      </span>
+      <span
+        style={{
+          fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif",
           fontWeight: 600,
-          fontSize: 56,
-          letterSpacing: '-1.5px',
-          fill: textColor,
+          fontSize: 15,
+          letterSpacing: '-0.01em',
+          color: '#111827',
         }}
       >
         Syflo
-      </text>
-      <path
-        className={animate ? 'ft-wave ft-wave--bot' : undefined}
-        d="M 38 110 Q 90 124, 140 112 T 240 114 T 322 110"
-        stroke="url(#syflo-logo-grad)"
-        strokeWidth="4"
-        strokeLinecap="round"
-        fill="none"
-      />
-    </svg>
+      </span>
+    </>
+  ),
+
+  'ink-blue': (
+    <>
+      <svg width="20" height="20" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <circle cx="7" cy="24" r="5" fill="#3B82F6" stroke="#1C2B4A" strokeWidth="3" />
+        <path d="M11 24 H 22 C 28 24, 29 15, 36 13" stroke="#1C2B4A" strokeWidth="4" strokeLinecap="round" />
+        <path d="M22 24 C 28 24, 29 33, 36 35" stroke="#1C2B4A" strokeWidth="4" strokeLinecap="round" />
+        <circle cx="39" cy="12.5" r="5.5" fill="#34D399" stroke="#1C2B4A" strokeWidth="3" />
+        <circle cx="39" cy="35.5" r="5.5" fill="#3B82F6" stroke="#1C2B4A" strokeWidth="3" />
+      </svg>
+      <span
+        style={{
+          fontFamily: "'Space Grotesk', 'DM Sans', sans-serif",
+          fontWeight: 700,
+          fontSize: 17,
+          letterSpacing: '-0.02em',
+          color: '#14263F',
+        }}
+      >
+        Sy<span style={{ color: '#3B82F6' }}>flo</span>
+      </span>
+    </>
+  ),
+
+  'mushroom-kingdom': (
+    <>
+      {/* Pixel mushroom, crispEdges so the "sprite" stays sharp when scaled */}
+      <svg width="20" height="20" viewBox="0 0 64 64" aria-hidden="true">
+        <g shapeRendering="crispEdges">
+          <rect x="16" y="6" width="32" height="8" fill="#26264F" />
+          <rect x="8" y="14" width="48" height="16" fill="#D8433B" />
+          <rect x="24" y="14" width="16" height="12" fill="#FFF9EE" />
+          <rect x="8" y="30" width="48" height="4" fill="#26264F" />
+          <rect x="18" y="34" width="28" height="16" fill="#FCEBC7" />
+          <rect x="16" y="50" width="32" height="4" fill="#26264F" />
+        </g>
+      </svg>
+      {/* Wortmarke in der Pixel-Display-Schrift des Themes (wie die
+          MODELS-/Sektions-Labels), nicht mehr Baloo 2 — Farben unverändert
+          (Nutzerkorrektur 2026-07-22). */}
+      <span
+        style={{
+          fontFamily: "'Press Start 2P', monospace",
+          fontSize: 12,
+          lineHeight: 1,
+          color: '#23234A',
+        }}
+      >
+        Sy<span style={{ color: '#D8433B' }}>flo</span>
+      </span>
+    </>
+  ),
+
+  hyrule: (
+    <>
+      <svg width="23" height="16" viewBox="0 0 86 60" fill="none" aria-hidden="true">
+        <path d="M6 30 H 34 C 44 30, 46 16, 58 13" stroke="#2AA198" strokeWidth="5" strokeLinecap="round" />
+        <path d="M34 30 C 44 30, 46 44, 58 47" stroke="#2AA198" strokeWidth="5" strokeLinecap="round" />
+        <rect x="58" y="4" width="15" height="15" transform="rotate(45 65.5 11.5)" fill="#B8963A" />
+        <rect x="58" y="38" width="15" height="15" transform="rotate(45 65.5 45.5)" fill="#B8963A" />
+      </svg>
+      <span
+        style={{
+          fontFamily: "'Marcellus', serif",
+          fontSize: 15,
+          letterSpacing: '0.18em',
+          textTransform: 'uppercase',
+          color: '#33372A',
+        }}
+      >
+        Syflo
+      </span>
+    </>
+  ),
+
+  matrix: (
+    <span
+      style={{
+        fontFamily: "'Share Tech Mono', 'IBM Plex Mono', monospace",
+        fontSize: 13,
+        letterSpacing: '0.1em',
+        textTransform: 'uppercase',
+        color: '#2BE76B',
+        textShadow: '0 0 8px rgba(43, 231, 107, 0.35)',
+      }}
+    >
+      <span style={{ color: '#12805B', textShadow: 'none' }}>&gt;_</span> SYFLO
+    </span>
+  ),
+};
+
+interface LogoProps {
+  className?: string;
+  // Vergrößert das Logo rein visuell (transform) — die Varianten behalten
+  // ihre für die Sidebar abgestimmten Pixelmaße. Für den Empty-State (~1.6).
+  scale?: number;
+}
+
+export function Logo({ className, scale = 1 }: LogoProps) {
+  const theme = useSyncExternalStore(subscribeToTheme, readTheme);
+  return (
+    <span
+      className={className}
+      role="img"
+      aria-label="Syflo"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 9,
+        lineHeight: 1,
+        ...(scale !== 1
+          ? { transform: `scale(${scale})`, transformOrigin: 'center' }
+          : null),
+      }}
+    >
+      {VARIANTS[theme]}
+    </span>
   );
 }

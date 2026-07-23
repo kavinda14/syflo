@@ -10,21 +10,44 @@
  * As text chunks arrive from the backend, it updates the placeholder in place so
  * the user sees the response building word-by-word. Once streaming finishes, the
  * temporary messages are swapped for the real persisted versions from the server.
+ * Streams are per-chat and keep running in the background when the user switches
+ * chats (buffer in activeStreamsRef; the sidebar shows animated dots for them).
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { FileText } from 'lucide-react';
 import { Sidebar } from './components/Sidebar';
-import { ChatArea } from './components/ChatArea';
+import { ChatArea, type ChatAreaHandle } from './components/ChatArea';
+import { ModelPicker } from './components/ChatArea/ModelPicker';
+import { SettingsModal, type SettingsTab } from './components/SettingsModal';
 import { MindMap } from './components/MindMap';
-import { PdfView, type PdfHighlightSelection } from './components/PdfView';
+import { ParentContextPane } from './components/ParentContextPane';
+import { PdfView, type PdfHighlightSelection, type PdfViewHandle } from './components/PdfView';
 import { HighlightActionsMenu } from './components/PdfView/HighlightActionsMenu';
 import { PaperSearchModal } from './components/PaperSearch';
 import { FloatingPopup } from './components/FloatingPopup';
+import { HighlightsDrawer } from './components/HighlightsDrawer';
 import { api, TreeHasPdfError } from './api';
 import { useHighlights } from './hooks/useHighlights';
+import { useChatHighlights } from './hooks/useChatHighlights';
 import { contextAroundSelection } from './pdf/selection';
-import type { Chat, ChatDetail, Highlight, HighlightColor, LocalAttachment, Message, Paper, SearchResult, Settings, WordPopup } from './types';
+import { INTERRUPTED_MARKER } from './types';
+import type { Chat, ChatAncestor, ChatDetail, ChatSelection, ComposerQuote, Highlight, HighlightColor, LocalAttachment, Message, MessageHighlight, OllamaModelInfo, Paper, SearchResult, SearchSource, Settings, SystemRecommendation, TreeHighlight, WordPopup } from './types';
+
+// Ein laufender Antwort-Stream. Antworten laufen beim Chat-Wechsel im
+// Hintergrund weiter (Nutzerkorrektur 2026-07-22) — der Puffer hält den
+// bisher gestreamten Stand außerhalb des React-States, damit Deltas auch
+// ankommen, während ein anderer Chat angezeigt wird, und der Teilstand beim
+// Zurückwechseln sofort wieder erscheint.
+interface ActiveStream {
+  tempUserId: string;
+  tempAssistantId: string;
+  content: string;
+  reasoning: string;
+  sources: SearchSource[];
+  createdAt: string;
+  abort: AbortController;
+}
 
 export default function App() {
   // chats: the full tree shown in the sidebar
@@ -50,12 +73,59 @@ export default function App() {
     });
   };
 
-  // Active LLM settings — surfaced in the sidebar footer so the user always
-  // knows which provider/model is being used (and whose API key is paying).
+  // Active LLM settings — die Composer-Pille zeigt das aktive Modell, das
+  // Settings-Modal (App-eigen) verwaltet die Bibliothek.
   const [settings, setSettings] = useState<Settings | null>(null);
 
-  // streaming: true while the AI is generating its response
-  const [streaming, setStreaming] = useState(false);
+  // Installierte Vision-Modelle (Backend filtert) + Hardware-Empfehlung —
+  // beides füttert die Composer-Pille und die Settings-Bibliothek.
+  const [ollamaModels, setOllamaModels] = useState<OllamaModelInfo[]>([]);
+  const [recommendation, setRecommendation] = useState<SystemRecommendation | null>(null);
+
+  // Settings-Modal gehört der App (der Picker und die Sidebar öffnen es).
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>('appearance');
+  const openSettings = useCallback((tab: SettingsTab) => {
+    setSettingsTab(tab);
+    setSettingsOpen(true);
+  }, []);
+
+  // Thinking pro Chat (Grill 2026-07-21): der Schalter gilt für den Chat,
+  // bis er wieder ausgeschaltet wird — nicht global, nicht pro Nachricht.
+  const [thinkByChat, setThinkByChat] = useState<Record<string, boolean>>({});
+
+  // Warnung, wenn das aktive Modell nur teilweise im GPU-Speicher liegt
+  // (CPU-Offloading = 10–20× langsamer) — gemeldet vom Prefix-Warm-up.
+  const [gpuWarning, setGpuWarning] = useState<string | null>(null);
+
+  // Wertet das Warm-up-Ergebnis aus: GPU-Warnung setzen oder aufräumen.
+  const handleWarmupResult = (r: import('./types').WarmupResult) => {
+    if (!r?.gpu) return;
+    setGpuWarning(
+      r.gpu.vramPercent < 100
+        ? `Model runs only ${r.gpu.vramPercent}% on the GPU — responses will be much slower. Try a smaller model.`
+        : null,
+    );
+  };
+
+  // Laufende Streams, EIN Eintrag pro Chat (siehe ActiveStream oben). Der
+  // Stop-Button bricht nur den Stream des gerade sichtbaren Chats ab.
+  const activeStreamsRef = useRef<Map<string, ActiveStream>>(new Map());
+  // Spiegel für die UI: Composer-Zustand des aktiven Chats + die animierten
+  // Punkte in der Sidebar für Hintergrund-Antworten.
+  const [streamingChatIds, setStreamingChatIds] = useState<Set<string>>(new Set());
+  // Live-Spiegel der aktiven Chat-ID für Stream-Callbacks (der State im
+  // Closure wäre veraltet, sobald der Nutzer den Chat wechselt).
+  const activeChatIdRef = useRef<string | null>(null);
+
+  const markStreaming = (chatId: string, on: boolean) => {
+    setStreamingChatIds(prev => {
+      const next = new Set(prev);
+      if (on) next.add(chatId);
+      else next.delete(chatId);
+      return next;
+    });
+  };
 
   // treePaper: the PDF bound to the active chat's tree (ADR-0002: one per
   // tree). Non-null switches the app into the three-column layout — tree in
@@ -108,6 +178,39 @@ export default function App() {
     localStorage.setItem('syflo.chatPaneWidth', String(drag.last));
   };
 
+  // Height of the mind-map pane (as % of the column), when the mind-map view
+  // is open above the chat. Same drag pattern as the chat column divider;
+  // stored as a percentage so it adapts to window resizes.
+  const MAP_PANE_MIN_PCT = 20;
+  const MAP_PANE_MAX_PCT = 80;
+  const [mapPaneHeightPct, setMapPaneHeightPct] = useState<number>(() => {
+    const stored = Number(localStorage.getItem('syflo.mapPaneHeight'));
+    return Number.isFinite(stored) && stored >= MAP_PANE_MIN_PCT && stored <= MAP_PANE_MAX_PCT
+      ? stored
+      : 50;
+  });
+  const mapPaneResizeRef = useRef<{ startY: number; startPct: number; containerH: number; last: number } | null>(null);
+  const handleMapPaneResizeStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const containerH = (e.currentTarget.parentElement as HTMLElement).clientHeight || 1;
+    mapPaneResizeRef.current = { startY: e.clientY, startPct: mapPaneHeightPct, containerH, last: mapPaneHeightPct };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const handleMapPaneResizeMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = mapPaneResizeRef.current;
+    if (!drag) return;
+    const deltaPct = ((e.clientY - drag.startY) / drag.containerH) * 100;
+    const next = Math.min(MAP_PANE_MAX_PCT, Math.max(MAP_PANE_MIN_PCT, drag.startPct + deltaPct));
+    drag.last = next;
+    setMapPaneHeightPct(next);
+  };
+  const handleMapPaneResizeEnd = () => {
+    const drag = mapPaneResizeRef.current;
+    if (!drag) return;
+    mapPaneResizeRef.current = null;
+    localStorage.setItem('syflo.mapPaneHeight', String(drag.last));
+  };
+
   // popup: the word the user right-clicked on, plus its screen coordinates
   const [popup, setPopup] = useState<WordPopup | null>(null);
   const [explanation, setExplanation] = useState('');
@@ -141,6 +244,113 @@ export default function App() {
     y: number;
   } | null>(null);
 
+  // ─── Chat-Text-Highlights + "Ask in chat" (mockup-chat-highlights-…) ──────
+
+  // No-PDF branch layout: while a branch chat is active and its tree has no
+  // PDF, the parent chat renders in the center pane as read-only context.
+  const [parentContext, setParentContext] = useState<ChatDetail | null>(null);
+  // Vorfahren-Pfad (Wurzel → … → Eltern) des aktiven Branches inkl. gecachter
+  // Summaries — gerendert als Kette + Karten über dem Parent-Kontext
+  // (mockup section 04).
+  const [ancestors, setAncestors] = useState<ChatAncestor[]>([]);
+
+  // Message-anchored highlights, one hook instance per visible chat pane.
+  const activeChatHl = useChatHighlights(activeChatId);
+  const parentChatHl = useChatHighlights(parentContext?.id ?? null);
+  // Route create/recolor/remove to the pane that owns the chat.
+  const hlApiFor = (chatId: string) =>
+    chatId === parentContext?.id ? parentChatHl : activeChatHl;
+
+  // Selection captured from a chat bubble at right-click time — the chat twin
+  // of pendingPdfSelectionRef.
+  const pendingChatSelectionRef = useRef<ChatSelection | null>(null);
+  const savedChatHighlightIdRef = useRef<string | null>(null);
+  const [popupHasChatSelection, setPopupHasChatSelection] = useState(false);
+
+  // Actions menu for an existing chat-text highlight (recolor / delete).
+  const [chatHighlightMenu, setChatHighlightMenu] = useState<{
+    highlight: MessageHighlight;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  // Die "blaue Markierung" sichtbar halten, solange das Popup offen ist
+  // (Nutzerkorrektur 2026-07-22): die native Selektion kollabiert beim Klick
+  // ins Popup. Chat: die erfasste Auswahl wird als Pending-Overlay gemalt;
+  // PDF: PdfView hält sein transientes Auswahl-Overlay fest.
+  const [pendingChatSelection, setPendingChatSelection] = useState<ChatSelection | null>(null);
+  const [holdPdfSelection, setHoldPdfSelection] = useState(false);
+
+  // "Open as new chat" aus einer Chat-Selektion: Ursprungs-Nachricht merken,
+  // damit das Parent-Context-Pane dorthin scrollt statt an den Anfang
+  // (Nutzer-Report 2026-07-22 — der Kontext der Auswahl soll sichtbar bleiben).
+  const [parentScrollTarget, setParentScrollTarget] = useState<{
+    chatId: string;
+    messageId: string;
+  } | null>(null);
+
+  // Highlights-Drawer über der Chat-Spalte (mockup-highlights-overview.html,
+  // Variante A). Startet geschlossen, wird nicht persistiert (Grill 2026-07-21).
+  const [highlightsOpen, setHighlightsOpen] = useState(false);
+  // Sprungziele für Drawer-Karten (Grill-Entscheidung 8: punktgenau + Flash).
+  const pdfViewRef = useRef<PdfViewHandle>(null);
+  const chatAreaRef = useRef<ChatAreaHandle>(null);
+  // Chat-Karte eines ANDEREN Branches: erst Branch laden, dann scrollen —
+  // der Effekt unten feuert, sobald der Ziel-Chat aktiv geworden ist.
+  const pendingChatScrollRef = useRef<{
+    chatId: string;
+    messageId: string;
+    // Offsets + Farbe der Markierung: lässt die Markierung selbst in ihrer
+    // Highlight-Farbe aufblinken statt der ganzen Bubble (Nutzerkorrekturen
+    // 2026-07-22).
+    startOffset?: number;
+    endOffset?: number;
+    color?: HighlightColor;
+  } | null>(null);
+
+  // "Ask in chat" quote waiting in a chat's composer. Keyed by chatId so a
+  // quote never leaks into a different chat's composer.
+  const [composerQuote, setComposerQuote] = useState<(ComposerQuote & { chatId: string }) | null>(null);
+
+  // Load the parent chat for the center context view — only when the active
+  // chat is a branch and the tree has no PDF (with a PDF the center belongs
+  // to the PDF, unchanged). Die Vorfahren-Kette dagegen wird für JEDEN
+  // Branch-Chat geladen: sie füttert das Kontext-Banner in der Chat-Spalte
+  // (Variante 3a), das unabhängig vom PDF erscheint.
+  useEffect(() => {
+    const parentId = activeChat?.parent_id;
+    if (!parentId) {
+      setParentContext(null);
+      setAncestors([]);
+      return;
+    }
+    let active = true;
+    if (treePaper) {
+      setParentContext(null);
+    } else {
+      api
+        .getChat(parentId)
+        .then((c) => {
+          if (active) setParentContext(c);
+        })
+        .catch(() => {
+          if (active) setParentContext(null);
+        });
+    }
+    // Fehler degradieren still zur leeren Kette (kein Banner).
+    api
+      .getAncestors(activeChat.id)
+      .then((a) => {
+        if (active) setAncestors(a);
+      })
+      .catch(() => {
+        if (active) setAncestors([]);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeChat?.id, activeChat?.parent_id, treePaper]);
+
   // Re-fetch the sidebar tree whenever a chat is created, renamed, or deleted.
   const refreshTree = useCallback(async () => {
     const tree = await api.getTree();
@@ -150,11 +360,37 @@ export default function App() {
   // Load the sidebar tree on initial render.
   useEffect(() => { refreshTree(); }, [refreshTree]);
 
-  // Load current LLM settings on initial render so the sidebar footer can show
-  // them right away. Failures are non-fatal — the footer simply renders nothing.
-  useEffect(() => {
-    api.getSettings().then(setSettings).catch(() => {});
+  // Modell-System beim Start: (1) Auto-Default anwenden (setzt das empfohlene
+  // Modell, falls installiert und nie manuell gewählt — Download-Gate bleibt),
+  // (2) Settings, installierte Vision-Modelle und Hardware-Empfehlung laden.
+  // Alles non-fatal — ohne Backend rendert die Pille schlicht nichts.
+  const refreshModelSystem = useCallback(async () => {
+    const [s, models, rec] = await Promise.all([
+      api.getSettings().catch(() => null),
+      api.getOllamaModels().catch(() => []),
+      api.getSystemRecommendation().catch(() => null),
+    ]);
+    if (s) setSettings(s);
+    setOllamaModels(models);
+    if (rec) setRecommendation(rec);
   }, []);
+
+  useEffect(() => {
+    api.applyRecommendedModel()
+      .catch(() => {})
+      .finally(() => { refreshModelSystem(); });
+  }, [refreshModelSystem]);
+
+  // Modellwechsel aus der Composer-Pille: nur installierte Modelle, wird als
+  // manuelle Wahl gespeichert (model_source 'manual' — Automatik bleibt weg).
+  const handleSelectModel = async (name: string) => {
+    try {
+      const s = await api.updateSettings({ ollama_model: name });
+      setSettings(s);
+    } catch (err) {
+      console.error('Failed to switch model:', err);
+    }
+  };
 
   // The mindmap toggle is hidden when no chat is active. If the user was in
   // mindmap view and the active chat goes away (e.g. deleted), drop them back
@@ -163,23 +399,72 @@ export default function App() {
     if (!activeChatId && viewMode === 'mindmap') setViewMode('chat');
   }, [activeChatId, viewMode]);
 
+  // Verlassene leere Chats aufräumen (Nutzerkorrektur 2026-07-22): Wer einen
+  // neuen Chat anlegt, nichts sendet und wegnavigiert, will ihn nicht in der
+  // Seitenleiste behalten. Nur unzweifelhaft wertlose Chats werden gelöscht:
+  // keine Nachrichten, keine Branches, kein gebundenes PDF, kein laufender
+  // Stream — und nur Wurzel-Chats (Branches tragen ihr parent_word als Kontext).
+  const cleanupAbandonedChat = (nextId: string) => {
+    const prev = activeChat;
+    if (
+      prev &&
+      prev.id !== nextId &&
+      !prev.parent_id &&
+      prev.messages.length === 0 &&
+      prev.children.length === 0 &&
+      treePaper === null &&
+      !activeStreamsRef.current.has(prev.id)
+    ) {
+      api.deleteChat(prev.id).then(() => refreshTree()).catch(() => {});
+    }
+  };
+
   // Load a chat's messages and mark it as active in the sidebar. The tree's
   // paper is fetched alongside so the three-column view survives a reload
   // (and closes when switching to a tree without a PDF).
   const handleSelectChat = async (id: string) => {
+    cleanupAbandonedChat(id);
     setActiveChatId(id);
+    activeChatIdRef.current = id;
     setLoadingChat(true);
     try {
       const [chat, paper] = await Promise.all([
         api.getChat(id),
         api.getTreePaper(id).catch(() => null),
       ]);
-      setActiveChat(chat);
+      // Läuft in diesem Chat noch ein Hintergrund-Stream, den Teilstand
+      // wieder anhängen: die User-Frage ist bereits serverseitig persistiert
+      // (Teil der GET-Antwort), nur die entstehende Assistant-Nachricht
+      // fehlt dort noch — sie kommt aus dem Stream-Puffer.
+      const stream = activeStreamsRef.current.get(id);
+      setActiveChat(
+        stream
+          ? { ...chat, messages: [...chat.messages, materializeStreamingAssistant(id, stream)] }
+          : chat,
+      );
       setTreePaper(paper);
+      // Prefix-Warm-up (fire-and-forget): das lokale Modell liest Paper +
+      // Historie schon jetzt ein — die erste Frage trifft auf warmen Cache.
+      // Nicht während ein Stream in diesem Chat läuft (der Prefix ist dann
+      // ohnehin heiß, und der Warm-up würde sich hinten anstellen).
+      if (!stream) api.warmupChat(id).then(handleWarmupResult).catch(() => {});
     } finally {
       setLoadingChat(false);
     }
   };
+
+  // Der aktuelle Zwischenstand eines Hintergrund-Streams als anzeigbare
+  // Assistant-Nachricht (gleiche temp-ID wie beim Absenden, damit weitere
+  // Deltas sie nahtlos weiterschreiben).
+  const materializeStreamingAssistant = (chatId: string, s: ActiveStream): Message => ({
+    id: s.tempAssistantId,
+    chat_id: chatId,
+    role: 'assistant',
+    content: s.content,
+    created_at: s.createdAt,
+    ...(s.sources.length > 0 ? { sources: [...s.sources] } : null),
+    ...(s.reasoning ? { reasoning: s.reasoning } : null),
+  });
 
   // Create a blank chat and immediately open it.
   const handleNewChat = async () => {
@@ -190,9 +475,12 @@ export default function App() {
 
   // Delete a chat; if it was the active chat, clear the chat area.
   const handleDeleteChat = async (id: string) => {
+    // Ein noch laufender Stream dieses Chats wäre verwaist — abbrechen.
+    activeStreamsRef.current.get(id)?.abort.abort();
     await api.deleteChat(id);
     if (activeChatId === id) {
       setActiveChatId(null);
+      activeChatIdRef.current = null;
       setActiveChat(null);
       setTreePaper(null);
     }
@@ -280,9 +568,14 @@ export default function App() {
     await refreshTree();
   };
 
-  // Send a message with optimistic UI and real-time streaming.
+  // Send a message with optimistic UI and real-time streaming. Der Stream
+  // gehört dem Chat, in dem gesendet wurde — wechselt der Nutzer den Chat,
+  // läuft er im Hintergrund weiter (Puffer in activeStreamsRef); alle
+  // React-State-Updates sind auf prev.id === chatId gewacht, damit Deltas
+  // nie in einen fremden Chat schreiben.
   const handleSendMessage = async (content: string, attachments: LocalAttachment[] = []) => {
-    if (!activeChatId) return;
+    const chatId = activeChatId;
+    if (!chatId) return;
 
     // Create temporary IDs for the optimistic messages.
     const tempUserId = `temp-user-${Date.now()}`;
@@ -301,89 +594,161 @@ export default function App() {
 
     // Immediately add the user's message and an empty assistant placeholder
     // so the UI feels instant and shows the streaming cursor right away.
-    const tempUser: Message = { id: tempUserId, chat_id: activeChatId, role: 'user', content, created_at: now, attachments: optimisticAttachments };
-    const tempAssistant: Message = { id: tempAssistantId, chat_id: activeChatId, role: 'assistant', content: '', created_at: now };
+    const tempUser: Message = { id: tempUserId, chat_id: chatId, role: 'user', content, created_at: now, attachments: optimisticAttachments };
+    const tempAssistant: Message = { id: tempAssistantId, chat_id: chatId, role: 'assistant', content: '', created_at: now };
 
-    setActiveChat(prev => prev ? { ...prev, messages: [...prev.messages, tempUser, tempAssistant] } : prev);
-    setStreaming(true);
+    const abort = new AbortController();
+    const stream: ActiveStream = {
+      tempUserId,
+      tempAssistantId,
+      content: '',
+      reasoning: '',
+      sources: [],
+      createdAt: now,
+      abort,
+    };
+    activeStreamsRef.current.set(chatId, stream);
+    markStreaming(chatId, true);
 
-    // Accumulate sources from any web_search tool calls during this stream.
-    // We keep them outside React state so multiple rapid updates don't race.
-    let streamingSources: import('./types').SearchSource[] = [];
+    setActiveChat(prev =>
+      prev && prev.id === chatId
+        ? { ...prev, messages: [...prev.messages, tempUser, tempAssistant] }
+        : prev,
+    );
+
+    // Patcht die Platzhalter-Nachricht — aber nur, wenn ihr Chat gerade
+    // sichtbar ist. Der Puffer in `stream` bleibt immer aktuell.
+    const patchAssistant = (patch: Partial<Message>) => {
+      setActiveChat(prev => {
+        if (!prev || prev.id !== chatId) return prev;
+        return {
+          ...prev,
+          messages: prev.messages.map(m => (m.id === tempAssistantId ? { ...m, ...patch } : m)),
+        };
+      });
+    };
+
+    // Denk-Phase dieses Streams: Startzeitpunkt fürs "Thought for Xs"-Label.
+    let thinkingStartedAt: number | null = null;
 
     try {
       // Stream the response — onDelta appends each chunk to the placeholder message.
       const { userMessage, assistantMessage } = await api.sendMessageStream(
-        activeChatId,
+        chatId,
         content,
         (delta) => {
-          setActiveChat(prev => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              messages: prev.messages.map(m =>
-                m.id === tempAssistantId ? { ...m, content: m.content + delta } : m
-              ),
-            };
-          });
+          stream.content += delta;
+          patchAssistant({ content: stream.content });
         },
         attachments,
         (evt) => {
           // Tool-event from the LLM. Phase 'result' for web_search carries
           // the sources we want to display under the assistant's answer.
-          // Phase 'call' is ignored here — the regular ThinkingIndicator is
-          // already showing while the tool runs, which is enough feedback.
           if (evt.phase !== 'result' || evt.name !== 'web_search' || !evt.result?.results) return;
-          streamingSources = [...streamingSources, ...evt.result.results];
-          const snapshot = streamingSources;
-          setActiveChat(prev => {
-            if (!prev) return prev;
-            return {
-              ...prev,
-              messages: prev.messages.map(m =>
-                m.id === tempAssistantId ? { ...m, sources: snapshot } : m
-              ),
-            };
-          });
+          stream.sources = [...stream.sources, ...evt.result.results];
+          patchAssistant({ sources: stream.sources });
+        },
+        {
+          think: thinkByChat[chatId] || undefined,
+          signal: abort.signal,
+          onThinking: () => {
+            thinkingStartedAt = Date.now();
+          },
+          onReasoning: (delta) => {
+            stream.reasoning += delta;
+            patchAssistant({ reasoning: stream.reasoning });
+          },
         },
       );
 
-      // Replace the temporary messages with the real persisted ones from the server.
-      // Carry the in-session sources over so the UI keeps showing them.
+      // Replace the temporary messages with the real persisted ones from the
+      // server — only if this chat is still on screen (a re-select merged the
+      // partial back in; the drop-set also covers the real IDs from that GET).
+      const thoughtForSeconds = thinkingStartedAt !== null
+        ? (Date.now() - thinkingStartedAt) / 1000
+        : undefined;
       setActiveChat(prev => {
-        if (!prev) return prev;
-        const filtered = prev.messages.filter(m => m.id !== tempUserId && m.id !== tempAssistantId);
-        const assistantWithSources = streamingSources.length > 0
-          ? { ...assistantMessage, sources: streamingSources }
-          : assistantMessage;
-        return { ...prev, messages: [...filtered, userMessage, assistantWithSources] };
+        if (!prev || prev.id !== chatId) return prev;
+        const finalAssistant: Message = {
+          ...assistantMessage,
+          ...(stream.sources.length > 0 ? { sources: stream.sources } : null),
+          ...(thoughtForSeconds !== undefined ? { thoughtForSeconds } : null),
+          ...(stream.reasoning ? { reasoning: stream.reasoning } : null),
+        };
+        const drop = new Set([tempUserId, tempAssistantId, userMessage.id, assistantMessage.id]);
+        const filtered = prev.messages.filter(m => !drop.has(m.id));
+        return { ...prev, messages: [...filtered, userMessage, finalAssistant] };
       });
 
       // Refresh the sidebar to pick up the auto-generated title after the first message.
       await refreshTree();
+
+      // Re-Warm-up (fire-and-forget): Nebenaufrufe wie Titel-Generierung oder
+      // Summary-Refreshes können Ollamas KV-Prefix verdrängt haben. Aber nur,
+      // wenn der Nutzer diesen Chat noch ansieht — sonst würde der Warm-up
+      // den Prefix des inzwischen aktiven Chats verdrängen (1 KV-Slot!).
+      if (activeChatIdRef.current === chatId) {
+        api.warmupChat(chatId).then(handleWarmupResult).catch(() => {});
+      }
     } catch (err) {
-      // On error, remove the optimistic messages so the UI stays consistent.
-      setActiveChat(prev => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          messages: prev.messages.filter(m => m.id !== tempUserId && m.id !== tempAssistantId),
-        };
-      });
-      console.error('Failed to send message:', err);
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        // Stop-Button (Nutzerentscheid 2026-07-22): der Teiltext wird
+        // verworfen, es bleibt nur die "Interrupted"-Markierung — das
+        // Backend persistiert denselben Marker.
+        patchAssistant({ content: INTERRUPTED_MARKER, reasoning: undefined, sources: undefined });
+        refreshTree().catch(() => {});
+      } else {
+        // On error, remove the optimistic messages so the UI stays consistent.
+        setActiveChat(prev => {
+          if (!prev || prev.id !== chatId) return prev;
+          return {
+            ...prev,
+            messages: prev.messages.filter(m => m.id !== tempUserId && m.id !== tempAssistantId),
+          };
+        });
+        console.error('Failed to send message:', err);
+      }
     } finally {
-      setStreaming(false);
+      activeStreamsRef.current.delete(chatId);
+      markStreaming(chatId, false);
     }
+  };
+
+  // Stop-Button im Composer: bricht den Stream des SICHTBAREN Chats ab —
+  // Hintergrund-Streams anderer Chats laufen weiter.
+  const handleStopStreaming = () => {
+    if (!activeChatId) return;
+    activeStreamsRef.current.get(activeChatId)?.abort.abort();
   };
 
   // Fetch an explanation for a right-clicked word and show the floating popup.
   const handleWordRightClick = async (wordPopup: WordPopup) => {
-    // Chat-message right-clicks have no PDF selection behind them — reset the
-    // PDF-popup state so the color row doesn't leak into chat popups.
+    // Word-at-point right-clicks have no selection behind them — reset both
+    // selection states so no color row leaks into the definition popup.
     pendingPdfSelectionRef.current = null;
     savedHighlightIdRef.current = null;
     setPopupHasPdfSelection(false);
+    pendingChatSelectionRef.current = null;
+    savedChatHighlightIdRef.current = null;
+    setPopupHasChatSelection(false);
+    setPendingChatSelection(null);
+    setHoldPdfSelection(false);
     await openPopupWithExplanation(wordPopup);
+  };
+
+  // Right-click with a live selection in a chat bubble (right pane or parent
+  // context pane): open the popup with the color row + "Ask in chat".
+  const handleChatSelection = (sel: ChatSelection, context: string, x: number, y: number) => {
+    pendingPdfSelectionRef.current = null;
+    savedHighlightIdRef.current = null;
+    setPopupHasPdfSelection(false);
+    pendingChatSelectionRef.current = sel;
+    savedChatHighlightIdRef.current = null;
+    setPopupHasChatSelection(true);
+    // Auswahl sichtbar halten, bis eine Aktion erfolgt oder das Popup schließt.
+    setPendingChatSelection(sel);
+    setHoldPdfSelection(false);
+    void openPopupWithExplanation({ word: sel.text, context, x, y });
   };
 
   const openPopupWithExplanation = async (wordPopup: WordPopup) => {
@@ -414,6 +779,9 @@ export default function App() {
     if (!sel) return; // no live selection — nothing to define or highlight
     savedHighlightIdRef.current = null;
     setPopupHasPdfSelection(true);
+    setPendingChatSelection(null);
+    // PdfView hält das Auswahl-Overlay fest, bis Aktion oder Schließen.
+    setHoldPdfSelection(true);
     void openPopupWithExplanation({
       word: sel.text,
       context: contextAroundSelection(sel.text),
@@ -424,9 +792,32 @@ export default function App() {
 
   // Swatch click in the popup (Slice 04): the first pick persists a highlight
   // on the captured selection; further picks recolor that same highlight so
-  // trying colors doesn't leave a trail of duplicates.
+  // trying colors doesn't leave a trail of duplicates. Same contract for chat
+  // selections, just against the message-anchored store.
   const handlePickColor = async (color: HighlightColor) => {
     setActiveColor(color);
+    // Ab jetzt zeigt das echte (pastellfarbene) Highlight die Auswahl — das
+    // Pending-Overlay würde nur doppelt darüberliegen.
+    setPendingChatSelection(null);
+    setHoldPdfSelection(false);
+    if (popupHasChatSelection) {
+      const sel = pendingChatSelectionRef.current;
+      if (!sel) return;
+      const saved = savedChatHighlightIdRef.current;
+      if (saved) {
+        await hlApiFor(sel.chatId).recolor(saved, color);
+        return;
+      }
+      const created = await hlApiFor(sel.chatId).create({
+        messageId: sel.messageId,
+        color,
+        text: sel.text,
+        startOffset: sel.startOffset,
+        endOffset: sel.endOffset,
+      });
+      if (created) savedChatHighlightIdRef.current = created.id;
+      return;
+    }
     const saved = savedHighlightIdRef.current;
     if (saved) {
       await updateHighlight(saved, { color });
@@ -449,28 +840,113 @@ export default function App() {
   // highlight a swatch click already created.
   const handleOpenChildChat = async (word: string) => {
     if (!activeChatId) return;
-    setPopup(null);
     const fromPdf = popupHasPdfSelection;
     const sel = pendingPdfSelectionRef.current;
     const saved = savedHighlightIdRef.current;
+    // For chat selections, branch from the chat the selection lives in — that
+    // can be the parent-context pane, not just the active chat.
+    const chatSel = pendingChatSelectionRef.current;
+    const savedChatHl = savedChatHighlightIdRef.current;
+    const parentId = popupHasChatSelection && chatSel ? chatSel.chatId : activeChatId;
+
+    // Create the chat FIRST. If the backend is unreachable this used to be an
+    // unhandled rejection that left the app dead after the popup had already
+    // closed (reported 2026-07-20). Now the popup stays open and shows the
+    // error in its body, same pattern as the explainWord failure above.
+    let child: Awaited<ReturnType<typeof api.createChat>>;
+    try {
+      child = await api.createChat(`About: ${word}`, parentId, word);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setExplanation(`Could not create chat: ${msg} — is the backend running?`);
+      console.error('createChat failed:', err);
+      return;
+    }
+    setPopup(null);
     pendingPdfSelectionRef.current = null;
     savedHighlightIdRef.current = null;
-    const child = await api.createChat(`About: ${word}`, activeChatId, word);
-    if (fromPdf) {
-      if (saved) {
-        await updateHighlight(saved, { chatId: child.id });
-      } else if (sel) {
-        await createHighlight({
+    pendingChatSelectionRef.current = null;
+    savedChatHighlightIdRef.current = null;
+    setPopupHasChatSelection(false);
+    setPendingChatSelection(null);
+    setHoldPdfSelection(false);
+    if (!fromPdf && chatSel) {
+      setParentScrollTarget({ chatId: chatSel.chatId, messageId: chatSel.messageId });
+    }
+    try {
+      if (fromPdf) {
+        if (saved) {
+          await updateHighlight(saved, { chatId: child.id });
+        } else if (sel) {
+          await createHighlight({
+            color: activeColor,
+            text: sel.text,
+            pageNumber: sel.pageNumber,
+            rects: sel.rects,
+            chatId: child.id,
+          });
+        }
+      } else if (chatSel && !savedChatHl) {
+        // Mockup Sektion 03: "The selection that spawned the branch stays
+        // visibly highlighted in the parent." Ohne vorherigen Swatch-Klick
+        // wird die Selektion in der aktiven Farbe markiert.
+        await hlApiFor(chatSel.chatId).create({
+          messageId: chatSel.messageId,
           color: activeColor,
-          text: sel.text,
-          pageNumber: sel.pageNumber,
-          rects: sel.rects,
-          chatId: child.id,
+          text: chatSel.text,
+          startOffset: chatSel.startOffset,
+          endOffset: chatSel.endOffset,
         });
       }
+      await refreshTree();
+      await handleSelectChat(child.id);
+    } catch (err) {
+      // The chat exists at this point — a failed highlight link or tree
+      // refresh must not take the whole app down with it.
+      console.error('Open as new chat: follow-up step failed:', err);
     }
-    await refreshTree();
-    await handleSelectChat(child.id);
+  };
+
+  // "Ask in chat" (mockup-chat-highlights-ask-in-chat.html): drop the
+  // selection as a removable quote into the ACTIVE chat's composer — no
+  // branch is created (that stays "Open as new chat"). Works for selections
+  // from the PDF, the parent-context pane, and the active chat itself.
+  // Chat-Selektionen werden dabei immer dauerhaft markiert (Nutzerentscheid
+  // 2026-07-21): ohne Swatch-Klick entsteht ein Highlight in der aktiven
+  // Farbe. Nur PDF-Selektionen bleiben ohne Farbwahl unmarkiert (graue
+  // Quote-Leiste).
+  const handleAskInChat = (word: string) => {
+    if (!activeChatId) return;
+    setPopup(null);
+    const fromPdf = popupHasPdfSelection;
+    const chatSel = pendingChatSelectionRef.current;
+    if (chatSel && !savedChatHighlightIdRef.current) {
+      void hlApiFor(chatSel.chatId).create({
+        messageId: chatSel.messageId,
+        color: activeColor,
+        text: chatSel.text,
+        startOffset: chatSel.startOffset,
+        endOffset: chatSel.endOffset,
+      });
+    }
+    const quoteColor =
+      savedHighlightIdRef.current || savedChatHighlightIdRef.current || chatSel
+        ? activeColor
+        : null;
+    pendingPdfSelectionRef.current = null;
+    savedHighlightIdRef.current = null;
+    pendingChatSelectionRef.current = null;
+    savedChatHighlightIdRef.current = null;
+    setPopupHasPdfSelection(false);
+    setPopupHasChatSelection(false);
+    setPendingChatSelection(null);
+    setHoldPdfSelection(false);
+
+    const sourceLabel = fromPdf
+      ? treePaper?.title ?? 'PDF'
+      : (chatSel?.chatId === parentContext?.id ? parentContext?.title : activeChat?.title) ??
+        'chat';
+    setComposerQuote({ chatId: activeChatId, text: word, sourceLabel, color: quoteColor });
   };
 
   // Close the popup and forget the captured selection. A highlight created
@@ -480,6 +956,11 @@ export default function App() {
     pendingPdfSelectionRef.current = null;
     savedHighlightIdRef.current = null;
     setPopupHasPdfSelection(false);
+    pendingChatSelectionRef.current = null;
+    savedChatHighlightIdRef.current = null;
+    setPopupHasChatSelection(false);
+    setPendingChatSelection(null);
+    setHoldPdfSelection(false);
   };
 
   // Recolor from the highlight actions menu. The menu stays open (matches
@@ -504,6 +985,117 @@ export default function App() {
     if (menu?.highlight.chatId) await handleSelectChat(menu.highlight.chatId);
   };
 
+  // Recolor/delete for an existing chat-text highlight — same menu component
+  // and same stays-open recolor semantics as the PDF variant.
+  const handleChatMenuChangeColor = async (color: HighlightColor) => {
+    const menu = chatHighlightMenu;
+    if (!menu) return;
+    setChatHighlightMenu({ ...menu, highlight: { ...menu.highlight, color } });
+    await hlApiFor(menu.highlight.chatId).recolor(menu.highlight.id, color);
+  };
+
+  const handleChatMenuDelete = async () => {
+    const menu = chatHighlightMenu;
+    setChatHighlightMenu(null);
+    if (menu) await hlApiFor(menu.highlight.chatId).remove(menu.highlight.id);
+  };
+
+  // ─── Highlights-Drawer (mockup-highlights-overview.html, Variante A) ──────
+
+  // Rechtsklick auf eine Drawer-Karte → dasselbe HighlightActionsMenu wie im
+  // Dokument. Die Drawer-Items tragen alle Felder der jeweiligen
+  // Highlight-Form, nur `kind` (und bei Chat `chatTitle`) kommt weg.
+  const handleDrawerItemContextMenu = (item: TreeHighlight, x: number, y: number) => {
+    if (item.kind === 'pdf') {
+      const { kind: _kind, ...highlight } = item;
+      setHighlightMenu({ highlight, x, y });
+    } else {
+      const { kind: _kind, chatTitle: _title, ...highlight } = item;
+      setChatHighlightMenu({ highlight, x, y });
+    }
+  };
+
+  // Klick auf eine Drawer-Karte (Grill-Entscheidungen 1+8): PDF-Karten
+  // scrollen das PDF punktgenau — der Drawer bleibt offen, das PDF ist ja
+  // daneben sichtbar. Chat-Karten wechseln ggf. den Branch, schließen den
+  // Drawer (der gescrollte Chat liegt darunter frei) und blinken die
+  // Ziel-Nachricht an.
+  const handleDrawerJump = (item: TreeHighlight) => {
+    if (item.kind === 'pdf') {
+      pdfViewRef.current?.scrollToHighlight(item.id);
+      return;
+    }
+    // Panel-Modus (kein PDF/Parent-Kontext, Highlights als rechte Spalte):
+    // der Chat liegt frei sichtbar daneben — das Panel bleibt beim Sprung
+    // offen (Nutzerkorrektur 2026-07-22). Nur bei Chat-Wechseln schließen:
+    // das Ziel kann ein Branch sein, dessen 3-Spalten-Layout den Drawer als
+    // Overlay ÜBER den Chat legen würde.
+    const panelMode = !treePaper && !parentContext;
+    if (!panelMode || item.chatId !== activeChatId) setHighlightsOpen(false);
+    const range = { startOffset: item.startOffset, endOffset: item.endOffset, color: item.color };
+    if (item.chatId === activeChatId) {
+      chatAreaRef.current?.scrollToMessage(item.messageId, range);
+    } else {
+      pendingChatScrollRef.current = { chatId: item.chatId, messageId: item.messageId, ...range };
+      handleSelectChat(item.chatId);
+    }
+  };
+
+  // Nachgelagertes Scrollen nach einem Branch-Wechsel aus dem Drawer: sobald
+  // der Ziel-Chat geladen und gerendert ist, zur Nachricht springen.
+  useEffect(() => {
+    const pending = pendingChatScrollRef.current;
+    if (pending && activeChat?.id === pending.chatId) {
+      pendingChatScrollRef.current = null;
+      chatAreaRef.current?.scrollToMessage(
+        pending.messageId,
+        pending.startOffset !== undefined &&
+          pending.endOffset !== undefined &&
+          pending.color !== undefined
+          ? { startOffset: pending.startOffset, endOffset: pending.endOffset, color: pending.color }
+          : undefined,
+      );
+    }
+  }, [activeChat]);
+
+  // Klick auf das "Branched from"-Zitat: nicht nur zum Elternchat wechseln,
+  // sondern punktgenau zur Quelle des Branches springen (Nutzerkorrektur
+  // 2026-07-22) — wie die Drawer-Sprünge: scrollen + aufblinken.
+  //   PDF-Branch:  das verlinkte PDF-Highlight (chatId = dieser Chat).
+  //   Chat-Branch: das beim Branchen erzeugte Highlight im Elternchat,
+  //                gefunden über den Zitat-Text (parent_word).
+  //   Ohne Treffer (z. B. Highlight gelöscht): schlichter Wechsel wie bisher.
+  const handleBranchedFromClick = async () => {
+    const chat = activeChat;
+    if (!chat?.parent_id) return;
+    const parentId = chat.parent_id;
+    const linkedPdfHighlight = highlights.find((h) => h.chatId === chat.id);
+    if (linkedPdfHighlight) {
+      await handleSelectChat(parentId);
+      pdfViewRef.current?.scrollToHighlight(linkedPdfHighlight.id);
+      return;
+    }
+    try {
+      const parentHighlights = await api.listMessageHighlights(parentId);
+      const quote = chat.parent_word?.trim();
+      const match = quote
+        ? parentHighlights.find((h) => h.text.trim() === quote)
+        : undefined;
+      if (match) {
+        pendingChatScrollRef.current = {
+          chatId: parentId,
+          messageId: match.messageId,
+          startOffset: match.startOffset,
+          endOffset: match.endOffset,
+          color: match.color,
+        };
+      }
+    } catch {
+      /* Backend nicht erreichbar — dann wenigstens den Chat wechseln */
+    }
+    await handleSelectChat(parentId);
+  };
+
   return (
     <div className="flex h-screen overflow-hidden bg-white">
       {/* Sidebar: chat list, new chat button, and mind map toggle */}
@@ -516,31 +1108,47 @@ export default function App() {
         onRename={handleRenameChat}
         viewMode={viewMode}
         onToggleView={() => setViewMode(v => v === 'chat' ? 'mindmap' : 'chat')}
-        settings={settings}
-        onSettingsChange={setSettings}
+        onOpenSettings={openSettings}
         collapsed={sidebarCollapsed}
         onToggleCollapsed={toggleSidebar}
+        streamingChatIds={streamingChatIds}
       />
 
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Mind map view: shown as the top half when the toggle is active */}
+        {/* Mind map view: shown above the chat when the toggle is active.
+            The divider below it drags to resize the map vertically
+            (20–80% of the column, persisted). */}
         {viewMode === 'mindmap' && (
-          <div className="h-1/2 border-b border-gray-200">
-            <MindMap
-              chats={chats}
-              activeChatId={activeChatId}
-              onSelect={handleSelectChat}
+          <>
+            <div style={{ height: `${mapPaneHeightPct}%` }}>
+              <MindMap
+                chats={chats}
+                activeChatId={activeChatId}
+                onSelect={handleSelectChat}
+              />
+            </div>
+            <div
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize mind map"
+              data-testid="mindmap-pane-resizer"
+              onPointerDown={handleMapPaneResizeStart}
+              onPointerMove={handleMapPaneResizeMove}
+              onPointerUp={handleMapPaneResizeEnd}
+              onPointerCancel={handleMapPaneResizeEnd}
+              className="h-1.5 shrink-0 cursor-row-resize bg-gray-200 hover:bg-blue-300 active:bg-blue-400 transition-colors"
             />
-          </div>
+          </>
         )}
 
         {/* Chat area: takes full height in chat mode, or the bottom half in mind map mode.
             With a tree PDF open this becomes the three-column layout
             (design/mockup-pdf-layout.html): PDF center, active branch's chat
             right — the tree stays in the left sidebar. */}
-        <div className={`${viewMode === 'mindmap' ? 'h-1/2' : 'h-full'} flex overflow-hidden`}>
+        <div className={`${viewMode === 'mindmap' ? 'flex-1 min-h-0' : 'h-full'} flex overflow-hidden`}>
           {treePaper && activeChatId && (
             <PdfView
+              ref={pdfViewRef}
               pdfUrl={treePaper.pdf_url}
               title={treePaper.title ?? undefined}
               highlights={highlights}
@@ -549,12 +1157,34 @@ export default function App() {
               onColorHighlightClick={(h, e) =>
                 setHighlightMenu({ highlight: h, x: e.clientX, y: e.clientY })
               }
+              keepSelectionVisible={holdPdfSelection && popup !== null}
             />
           )}
-          {/* Divider between PDF and chat — drag to resize the chat column
-              sideways (min 300px, max 800px). Only present in the
-              three-column layout. */}
-          {treePaper && activeChatId && (
+          {/* No-PDF branch layout (mockup-chat-highlights-ask-in-chat.html,
+              section 03): the parent chat takes the center pane as read-only
+              context while the branch lives in the right pane. */}
+          {!treePaper && parentContext && activeChatId && (
+            <ParentContextPane
+              chat={parentContext}
+              highlights={parentChatHl.highlights}
+              onOpenChat={handleSelectChat}
+              onSelectChat={handleSelectChat}
+              onWordRightClick={handleWordRightClick}
+              onChatSelection={handleChatSelection}
+              onHighlightContextMenu={(h, x, y) => setChatHighlightMenu({ highlight: h, x, y })}
+              pendingSelection={pendingChatSelection}
+              scrollToMessageId={
+                parentScrollTarget?.chatId === parentContext.id
+                  ? parentScrollTarget.messageId
+                  : null
+              }
+              onScrollTargetConsumed={() => setParentScrollTarget(null)}
+            />
+          )}
+          {/* Divider between center pane (PDF or parent context) and chat —
+              drag to resize the chat column sideways (min 300px, max 800px).
+              Only present in the three-column layout. */}
+          {(treePaper || parentContext) && activeChatId && (
             <div
               role="separator"
               aria-orientation="vertical"
@@ -569,24 +1199,81 @@ export default function App() {
           )}
           <div
             className={
-              treePaper && activeChatId
+              (treePaper || parentContext) && activeChatId
                 ? 'shrink-0 flex overflow-hidden border-l border-gray-200'
                 : 'flex-1 flex overflow-hidden'
             }
-            style={treePaper && activeChatId ? { width: chatPaneWidth } : undefined}
-            data-testid={treePaper && activeChatId ? 'chat-pane-right' : undefined}
+            style={(treePaper || parentContext) && activeChatId ? { width: chatPaneWidth } : undefined}
+            data-testid={(treePaper || parentContext) && activeChatId ? 'chat-pane-right' : undefined}
           >
             <ChatArea
+              ref={chatAreaRef}
               chat={activeChat}
               loading={loadingChat}
-              streaming={streaming}
+              streaming={activeChatId ? streamingChatIds.has(activeChatId) : false}
               onSendMessage={handleSendMessage}
               onWordRightClick={handleWordRightClick}
               onSelectChat={handleSelectChat}
+              onBranchedFromClick={handleBranchedFromClick}
               onUploadPdf={handleUploadPdf}
               onOpenPaperSearch={() => setPaperSearchOpen(true)}
+              chatHighlights={activeChatHl.highlights}
+              onChatSelection={handleChatSelection}
+              onHighlightContextMenu={(h, x, y) => setChatHighlightMenu({ highlight: h, x, y })}
+              pendingSelection={pendingChatSelection}
+              composerQuote={composerQuote && composerQuote.chatId === activeChat?.id ? composerQuote : null}
+              onClearComposerQuote={() => setComposerQuote(null)}
+              onToggleHighlights={() => setHighlightsOpen((o) => !o)}
+              highlightsOpen={highlightsOpen}
+              onStopStreaming={handleStopStreaming}
+              ancestors={ancestors}
+              modelPicker={
+                settings?.llm_provider === 'ollama' && activeChatId ? (
+                  <ModelPicker
+                    activeModel={settings.ollama_model}
+                    models={ollamaModels}
+                    recommendedModel={recommendation?.recommendedModel ?? null}
+                    onSelectModel={handleSelectModel}
+                    think={Boolean(thinkByChat[activeChatId])}
+                    onToggleThink={() =>
+                      setThinkByChat(prev => ({ ...prev, [activeChatId]: !prev[activeChatId] }))
+                    }
+                    onOpenSettings={() => openSettings('model')}
+                    disabled={streamingChatIds.has(activeChatId)}
+                    gpuWarning={gpuWarning}
+                  />
+                ) : null
+              }
+              highlightsDrawer={
+                // Nur im 3-Spalten-Layout als Overlay über der Chat-Spalte —
+                // ohne PDF/Parent-Kontext rendert die rechte Panel-Spalte unten.
+                highlightsOpen && activeChatId && (treePaper || parentContext) ? (
+                  <HighlightsDrawer
+                    chatId={activeChatId}
+                    onClose={() => setHighlightsOpen(false)}
+                    onJump={handleDrawerJump}
+                    onItemContextMenu={handleDrawerItemContextMenu}
+                  />
+                ) : null
+              }
             />
           </div>
+          {/* Chat allein in voller Breite (kein PDF, kein Parent-Kontext):
+              Highlights als eigene RECHTE Seitenspalte neben dem Chat statt
+              als Overlay über der ganzen Seite (Nutzerentscheidung
+              2026-07-22) — Highlights und Chat bleiben gleichzeitig
+              sichtbar. */}
+          {!treePaper && !parentContext && activeChatId && highlightsOpen && (
+            <div className="w-96 shrink-0 overflow-hidden" data-testid="highlights-panel-right">
+              <HighlightsDrawer
+                variant="panel"
+                chatId={activeChatId}
+                onClose={() => setHighlightsOpen(false)}
+                onJump={handleDrawerJump}
+                onItemContextMenu={handleDrawerItemContextMenu}
+              />
+            </div>
+          )}
         </div>
       </div>
 
@@ -628,6 +1315,23 @@ export default function App() {
         </div>
       )}
 
+      {/* Settings-Modal — App-eigen, damit Sidebar-Zahnrad UND Composer-Pille
+          es öffnen können. onSaved hält die Pille synchron; nach Downloads/
+          Löschungen in der Bibliothek wird das Modell-System neu geladen. */}
+      <SettingsModal
+        open={settingsOpen}
+        onClose={() => { setSettingsOpen(false); refreshModelSystem(); }}
+        onSaved={setSettings}
+        initialTab={settingsTab}
+        recommendation={recommendation}
+        onLibraryChanged={async () => {
+          // Nach einem Download darf die Automatik greifen (nur bei
+          // model_source 'auto' — manuelle Wahl gewinnt immer).
+          await api.applyRecommendedModel().catch(() => {});
+          await refreshModelSystem();
+        }}
+      />
+
       {/* Floating popup: appears near the right-clicked word with its explanation.
           For PDF selections it also shows the highlight color row. */}
       <FloatingPopup
@@ -636,8 +1340,9 @@ export default function App() {
         loading={loadingExplanation}
         onClose={handleClosePopup}
         onOpenChildChat={handleOpenChildChat}
-        onPickColor={popupHasPdfSelection ? handlePickColor : undefined}
+        onPickColor={popupHasPdfSelection || popupHasChatSelection ? handlePickColor : undefined}
         activeColor={activeColor}
+        onAskInChat={popupHasPdfSelection || popupHasChatSelection ? handleAskInChat : undefined}
       />
 
       {/* Paper-search modal (Slice 07): search OpenAlex + arXiv and import
@@ -660,6 +1365,21 @@ export default function App() {
           onChangeColor={handleMenuChangeColor}
           onDelete={handleMenuDelete}
           onOpenChat={handleMenuOpenChat}
+        />
+      )}
+
+      {/* Actions menu for an existing chat-text highlight: recolor / delete.
+          chatId: null hides "Open linked chat" — chat highlights don't link
+          to branches (the message itself lives in a chat already). */}
+      {chatHighlightMenu && (
+        <HighlightActionsMenu
+          highlight={{ color: chatHighlightMenu.highlight.color, chatId: null }}
+          x={chatHighlightMenu.x}
+          y={chatHighlightMenu.y}
+          onClose={() => setChatHighlightMenu(null)}
+          onChangeColor={handleChatMenuChangeColor}
+          onDelete={handleChatMenuDelete}
+          onOpenChat={() => setChatHighlightMenu(null)}
         />
       )}
     </div>

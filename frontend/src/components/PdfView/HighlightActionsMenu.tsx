@@ -20,7 +20,7 @@
 import { useEffect, useRef } from 'react';
 import { Check, MessageSquare, Trash2 } from 'lucide-react';
 import { HIGHLIGHT_COLORS } from '../../types';
-import type { Highlight, HighlightColor } from '../../types';
+import type { HighlightColor } from '../../types';
 import { useLabels } from '../../hooks/useLabels';
 
 const SWATCH_BG: Record<HighlightColor, string> = {
@@ -32,7 +32,10 @@ const SWATCH_BG: Record<HighlightColor, string> = {
 };
 
 interface Props {
-  highlight: Highlight;
+  // Only the color and (for PDF highlights) the linked branch are needed —
+  // keeping the shape minimal lets chat-text highlights reuse this menu
+  // (they pass chatId: null, which hides "Open linked chat").
+  highlight: { color: HighlightColor; chatId?: string | null };
   x: number;
   y: number;
   onClose: () => void;
@@ -126,9 +129,9 @@ export function HighlightActionsMenu({
         <button
           type="button"
           onClick={onDelete}
-          className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50 transition-colors"
+          className="w-full flex items-center gap-2.5 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
         >
-          <Trash2 size={14} />
+          <Trash2 size={14} className="text-gray-500" />
           Delete highlight
         </button>
       </div>

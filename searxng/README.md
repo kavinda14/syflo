@@ -31,7 +31,7 @@ Beim ersten Mal lädt Docker das Image (~150 MB) — danach geht's in Sekunden.
 Test:
 
 ```bash
-curl "http://localhost:8888/search?q=quantum+mechanics&format=json" | head -50
+curl "http://localhost:8890/search?q=quantum+mechanics&format=json" | head -50
 ```
 
 Sollte JSON mit `results: [...]` zurückgeben.

@@ -36,7 +36,17 @@ vi.mock('../api', () => ({
   api: {
     getTree: vi.fn(),
     getSettings: vi.fn(),
+    // Modell-System v2: App ruft diese beim Start auf — Defaults, damit
+    // bestehende Tests ohne eigenes Setup weiterlaufen.
+    applyRecommendedModel: vi.fn().mockResolvedValue({ applied: false, model: '' }),
+    warmupChat: vi.fn().mockResolvedValue(undefined),
+    getOllamaModels: vi.fn().mockResolvedValue([]),
+    getSystemRecommendation: vi.fn().mockRejectedValue(new Error('none')),
+    updateSettings: vi.fn(),
+    pullOllamaModel: vi.fn().mockResolvedValue(undefined),
+    deleteOllamaModel: vi.fn().mockResolvedValue(undefined),
     getChat: vi.fn(),
+    getAncestors: vi.fn().mockResolvedValue([]),
     getTreePaper: vi.fn(),
     uploadPaper: vi.fn(),
     createChat: vi.fn(),
@@ -45,6 +55,10 @@ vi.mock('../api', () => ({
     sendMessageStream: vi.fn(),
     explainWord: vi.fn(),
     listHighlights: vi.fn(),
+    listMessageHighlights: vi.fn(),
+    createMessageHighlight: vi.fn(),
+    updateMessageHighlight: vi.fn(),
+    deleteMessageHighlight: vi.fn(),
     createHighlight: vi.fn(),
     updateHighlight: vi.fn(),
     deleteHighlight: vi.fn(),
@@ -85,6 +99,7 @@ beforeEach(() => {
   vi.mocked(api.getTreePaper).mockResolvedValue(null);
   vi.mocked(api.uploadPaper).mockResolvedValue(paper);
   vi.mocked(api.listHighlights).mockResolvedValue([]);
+  vi.mocked(api.listMessageHighlights).mockResolvedValue([]);
   vi.mocked(api.getHighlightLabels).mockResolvedValue({
     yellow: 'Important', green: 'Agree', blue: 'Reference', pink: 'Question', orange: 'Disagree',
   });
@@ -249,5 +264,57 @@ describe('App — Paper-Suche (Slice 07)', () => {
         ['https://mirror.example.org/1706.pdf'],
       ),
     );
+  });
+});
+
+describe('App — verlassene leere Chats aufräumen (Nutzerkorrektur 2026-07-22)', () => {
+  const withMessages: ChatDetail = {
+    ...rootChat,
+    messages: [
+      { id: 'm1', chat_id: 'c1', role: 'user', content: 'Hi', created_at: '2026-07-11T00:01:00Z' },
+    ],
+    children: [],
+  };
+
+  it('löscht einen leeren neuen Chat, wenn man zu einem anderen Chat wegnavigiert', async () => {
+    const newChat: Chat = { ...rootChat, id: 'c2', title: 'New Chat' };
+    vi.mocked(api.createChat).mockResolvedValue(newChat);
+    vi.mocked(api.deleteChat).mockResolvedValue(undefined as never);
+    vi.mocked(api.getChat).mockImplementation(async (id: string) =>
+      id === 'c2' ? { ...newChat, messages: [], children: [] } : withMessages,
+    );
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Lease review')).toBeInTheDocument());
+
+    // Neuen Chat anlegen, nichts senden, zurück zum bestehenden Chat.
+    fireEvent.click(screen.getByTitle('New Chat'));
+    await waitFor(() => expect(api.getChat).toHaveBeenCalledWith('c2'));
+    fireEvent.click(screen.getByText('Lease review'));
+
+    await waitFor(() => expect(api.deleteChat).toHaveBeenCalledWith('c2'));
+  });
+
+  it('löscht einen Chat mit Nachrichten beim Wegnavigieren NICHT', async () => {
+    const emptyChat: Chat = { ...rootChat, id: 'c2', title: 'New Chat' };
+    vi.mocked(api.deleteChat).mockResolvedValue(undefined as never);
+    vi.mocked(api.getTree).mockResolvedValue([rootChat, emptyChat]);
+    vi.mocked(api.getChat).mockImplementation(async (id: string) =>
+      id === 'c2' ? { ...emptyChat, messages: [], children: [] } : withMessages,
+    );
+
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Lease review')).toBeInTheDocument());
+
+    // Chat MIT Nachrichten öffnen und wegnavigieren → bleibt erhalten.
+    // (Nach der Auswahl zeigt die Sidebar die erweiterte Einzelbaum-Ansicht —
+    // erst über "All chats" zurück zur Liste, dann den anderen Chat öffnen.)
+    fireEvent.click(screen.getByText('Lease review'));
+    await waitFor(() => expect(api.getChat).toHaveBeenCalledWith('c1'));
+    fireEvent.click(screen.getByText('All chats'));
+    fireEvent.click(screen.getByText('New Chat'));
+    await waitFor(() => expect(api.getChat).toHaveBeenCalledWith('c2'));
+
+    expect(api.deleteChat).not.toHaveBeenCalled();
   });
 });

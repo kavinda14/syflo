@@ -5,13 +5,19 @@
  * input field, the send button, and the microphone button for voice dictation.
  */
 
-import { useState, useRef, useEffect, useMemo } from 'react';
-import { Mic, MicOff, Plus, ArrowUp, ChevronDown, ChevronUp, Image as ImageIcon, FileText, BookOpen } from 'lucide-react';
+import { useState, useRef, useEffect, useImperativeHandle, useMemo } from 'react';
+import { Mic, MicOff, Plus, ArrowUp, ChevronDown, ChevronUp, Highlighter, Image as ImageIcon, ImagePlus, FileText, BookOpen, MessageSquareQuote, Square, X } from 'lucide-react';
 import { MessageBubble } from './MessageBubble';
+import { InheritedContextBanner } from './InheritedContextBanner';
 import { AttachmentChip } from './AttachmentChip';
+import { Logo } from '../Logo';
 import { VoiceWaveform } from './VoiceWaveform';
 import { useVoiceInput } from '../../hooks/useVoiceInput';
-import type { ChatDetail, LocalAttachment, WordPopup } from '../../types';
+import { HIGHLIGHT_HEX } from '../../types';
+import type { ChatAncestor, ChatDetail, ChatSelection, ComposerQuote, HighlightColor, LocalAttachment, MessageHighlight, WordPopup } from '../../types';
+import { rangeFromOffsets } from '../../chat/highlightAnchors';
+import { deriveQuestions, currentQuestionIndex } from '../../chat/questionNav';
+import { QuestionNavButton, QuestionStepper } from './QuestionNav';
 
 interface Props {
   chat: ChatDetail | null;
@@ -26,7 +32,58 @@ interface Props {
   // "Research paper" im Plus-Menü: öffnet das Paper-Such-Modal (Slice 07).
   // Ohne Handler wird der Menüeintrag nicht angeboten.
   onOpenPaperSearch?: () => void;
+  // Chat-Text-Highlights dieses Chats — MessageBubble malt die zur jeweiligen
+  // Nachricht gehörenden (mockup-chat-highlights-ask-in-chat.html).
+  chatHighlights?: MessageHighlight[];
+  // Rechtsklick mit Auswahl in einer Bubble → Popup mit Farbreihe + Ask in chat.
+  onChatSelection?: (sel: ChatSelection, context: string, x: number, y: number) => void;
+  // Rechtsklick auf ein bestehendes Chat-Highlight → Recolor/Delete-Menü.
+  onHighlightContextMenu?: (highlight: MessageHighlight, x: number, y: number) => void;
+  // Die beim Rechtsklick erfasste Auswahl, solange das Popup offen ist —
+  // MessageBubble malt sie als Pending-Overlay weiter (die native Selektion
+  // kollabiert beim Klick ins Popup).
+  pendingSelection?: ChatSelection | null;
+  // Klick auf den "Branched from"-Link: springt punktgenau zur Quelle des
+  // Branches (Highlight im Elternchat bzw. im PDF). Ohne Handler fällt der
+  // Link auf onSelectChat(parent_id) zurück.
+  onBranchedFromClick?: () => void;
+  // "Ask in chat"-Zitat, das vorbefüllt über der Textarea hängt. Beim Senden
+  // wird es als Markdown-Blockquote über die Frage gestellt.
+  composerQuote?: ComposerQuote | null;
+  onClearComposerQuote?: () => void;
+  // Highlights-Drawer (mockup-highlights-overview.html, Variante A): der
+  // Knopf im permanenten Header togglet; der Drawer selbst kommt als Slot
+  // vom Owner (App) und legt sich über den Chat-Inhalt unterhalb des Headers.
+  // Ohne Handler wird kein Knopf angeboten.
+  onToggleHighlights?: () => void;
+  highlightsOpen?: boolean;
+  highlightsDrawer?: React.ReactNode;
+  // Modell-Pille unten rechts im Composer (design/mockup-model-picker.html,
+  // Sektion 02) — kommt fertig komponiert vom Owner (App).
+  modelPicker?: React.ReactNode;
+  // Stop-Button: während des Streamens wird der Senden-Pfeil zum roten
+  // Quadrat; der Handler bricht den Stream ab (bereits Gestreamtes bleibt).
+  onStopStreaming?: () => void;
+  // Vorfahren-Pfad des aktiven Chats fürs Kontext-Banner unter dem Header
+  // (design/mockup-context-banner-variants.html §01, Variante 3a) — der
+  // geerbte Kontext wird im Chat angezeigt, der ihn empfängt.
+  ancestors?: ChatAncestor[];
+  ref?: React.Ref<ChatAreaHandle>;
 }
+
+// Imperative Sprung-API für den Highlights-Drawer: App ruft scrollToMessage,
+// wenn eine Chat-Karte geklickt wird (Grill-Entscheidung 8: punktgenau+Flash).
+// Mit range blinkt die Markierung selbst auf (Nutzerkorrektur 2026-07-22);
+// ohne range fällt der Flash auf die ganze Bubble zurück.
+export interface ChatAreaHandle {
+  scrollToMessage: (
+    messageId: string,
+    range?: { startOffset: number; endOffset: number; color: HighlightColor },
+  ) => void;
+}
+
+// Dauer des Aufblinkens nach einem Drawer-Sprung.
+const FLASH_MS = 1500;
 
 // Wählt eine Alias-Basis je nach MIME-Typ — z. B. "@foto" für Bilder.
 function aliasBaseFor(mimetype: string): string {
@@ -39,7 +96,7 @@ function aliasBaseFor(mimetype: string): string {
 // auto-scroll once the user manually scrolls back down.
 const AT_BOTTOM_THRESHOLD = 8;
 
-export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightClick, onSelectChat, onUploadPdf, onOpenPaperSearch }: Props) {
+export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightClick, onSelectChat, onUploadPdf, onOpenPaperSearch, chatHighlights, onChatSelection, onHighlightContextMenu, pendingSelection, onBranchedFromClick, composerQuote, onClearComposerQuote, onToggleHighlights, highlightsOpen, highlightsDrawer, modelPicker, onStopStreaming, ancestors, ref }: Props) {
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
@@ -49,6 +106,9 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
   const [mentionIndex, setMentionIndex] = useState(0);
   // Steuert das kleine Plus-Popover-Menü ("Files and media", …) — wie bei Claude.
   const [pickerMenuOpen, setPickerMenuOpen] = useState(false);
+  // True, solange Dateien über dem Eingabebereich schweben — zeigt das Drop-Overlay.
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const dragDepthRef = useRef(0);
   const pickerMenuRef = useRef<HTMLDivElement>(null);
   const plusButtonRef = useRef<HTMLButtonElement>(null);
   // Mirror state for rendering the "scroll to latest" button.
@@ -63,7 +123,11 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pdfInputRef = useRef<HTMLInputElement>(null);
   const chatColumnClass = 'shrink-0 px-6 sm:px-8';
-  const chatColumnStyle = { width: '46rem', maxWidth: 'calc(100% - 3rem)' };
+  // maxWidth 100% (statt calc(100% - 3rem)): in der schmalen Drei-Spalten-
+  // Chat-Spalte sind die px-Innenabstände Gutter genug — die zusätzlichen
+  // 3rem Außenrand quetschten den Composer, bis der Senden-Knopf aus dem
+  // Eingabefeld ragte (Nutzerkorrektur 2026-07-22).
+  const chatColumnStyle = { width: '46rem', maxWidth: '100%' };
 
   // "Branched from"-Zitat: standardmäßig auf 2 Zeilen geklemmt; der Chevron
   // klappt den vollen Text auf. Der Chevron erscheint nur, wenn das Zitat
@@ -178,18 +242,53 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
     setPinned(true);
   }, [chat?.id]);
 
+  // Antworten laufen pro Chat im Hintergrund weiter (App verwaltet die
+  // Streams). `sending` gehört zum Chat, in dem gesendet wurde — beim
+  // Wechsel zurücksetzen, damit der Composer anderer Chats nicht blockiert;
+  // im streamenden Chat übernimmt das `streaming`-Prop.
+  useEffect(() => {
+    setSending(false);
+  }, [chat?.id]);
+
   const scrollToBottom = () => {
     setPinned(true);
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   // Expand the textarea vertically as the user types, capped at 144px.
-  useEffect(() => {
+  const autosizeTextarea = () => {
     const ta = textareaRef.current;
     if (!ta) return;
     ta.style.height = 'auto';
     ta.style.height = `${Math.min(Math.max(ta.scrollHeight, 44), 144)}px`;
-  }, [input]);
+  };
+  useEffect(autosizeTextarea, [input]);
+
+  // Auch bei Breitenänderungen neu messen (Sidebar ein-/ausklappen, Spalten-
+  // Drag): der Text bricht dann anders um und die alte Höhe stimmt nicht
+  // mehr — das Eingabefeld blieb sonst zu hoch/zu niedrig stehen. Nur auf
+  // Breitenwechsel reagieren, damit unsere eigene Höhenänderung den
+  // Observer nicht in eine Schleife schickt.
+  useEffect(() => {
+    const ta = textareaRef.current;
+    if (!ta || typeof ResizeObserver === 'undefined') return;
+    let lastWidth = ta.offsetWidth;
+    const ro = new ResizeObserver(() => {
+      const width = ta.offsetWidth;
+      if (width !== lastWidth) {
+        lastWidth = width;
+        autosizeTextarea();
+      }
+    });
+    ro.observe(ta);
+    return () => ro.disconnect();
+  }, [chat?.id]);
+
+  // "Ask in chat": Zitat frisch injiziert → Cursor direkt ins Eingabefeld,
+  // damit die Frage ohne Extra-Klick losgetippt werden kann.
+  useEffect(() => {
+    if (composerQuote) textareaRef.current?.focus();
+  }, [composerQuote]);
 
   const handleSend = async () => {
     // Während der Aufnahme nicht senden — User muss erst stoppen, damit das
@@ -197,13 +296,19 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
     if (isListening) return;
     const text = input.trim();
     if ((!text && attachments.length === 0) || sending || !chat) return;
+    // Zitat als Markdown-Blockquote über die Frage stellen — so landet es im
+    // LLM-Kontext und MessageBubble rendert es als Zitatblock in der Bubble.
+    const content = composerQuote && text
+      ? composerQuote.text.split('\n').map((l) => `> ${l}`).join('\n') + '\n\n' + text
+      : text;
     const sentAttachments = attachments;
     setInput('');
     setAttachments([]);
     setMentionQuery(null);
+    if (composerQuote) onClearComposerQuote?.();
     setSending(true);
     try {
-      await onSendMessage(text, sentAttachments);
+      await onSendMessage(content, sentAttachments);
     } finally {
       setSending(false);
       sentAttachments.forEach(a => a.previewUrl && URL.revokeObjectURL(a.previewUrl));
@@ -280,9 +385,8 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [pickerMenuOpen]);
 
-  // Wenn der User Dateien auswählt: in lokale Anhänge umwandeln, automatisch @-Aliase vergeben.
-  const handleFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
+  // Dateien (aus Picker oder Drop) in lokale Anhänge umwandeln, automatisch @-Aliase vergeben.
+  const addFiles = (files: File[]) => {
     if (files.length === 0) return;
     setAttachments(prev => {
       const next = [...prev];
@@ -301,8 +405,51 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
       }
       return next;
     });
+  };
+
+  const handleFilesSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    addFiles(Array.from(e.target.files || []));
     // Input zurücksetzen, damit dieselbe Datei nochmal gewählt werden kann
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  // Beim Drop gilt dieselbe Typ-Liste wie beim Datei-Picker (accept-Attribut) —
+  // der Browser filtert gedroppte Dateien nicht selbst.
+  const isAcceptedDropFile = (file: File): boolean => {
+    if (file.type.startsWith('image/') || file.type.startsWith('text/')) return true;
+    if (file.type === 'application/pdf' || file.type === 'application/json') return true;
+    const name = file.name.toLowerCase();
+    return ['.pdf', '.md', '.txt', '.csv', '.json'].some(ext => name.endsWith(ext));
+  };
+
+  // dragenter/dragleave feuern für jedes Kind-Element erneut — ein Tiefenzähler
+  // verhindert, dass das Overlay dabei flackert oder zu früh verschwindet.
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    if (!isBusy) setIsDraggingFiles(true);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = isBusy ? 'none' : 'copy';
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setIsDraggingFiles(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    if (!e.dataTransfer.types.includes('Files')) return;
+    e.preventDefault();
+    dragDepthRef.current = 0;
+    setIsDraggingFiles(false);
+    if (isBusy) return;
+    addFiles(Array.from(e.dataTransfer.files).filter(isAcceptedDropFile));
   };
 
   const handleRemoveAttachment = (idx: number) => {
@@ -390,12 +537,175 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
 
   const isBusy = sending || streaming || loading;
 
+  // Sprung aus dem Highlights-Drawer: Nachricht mittig in den Viewport
+  // scrollen und die Zeile kurz aufblinken lassen (Grill-Entscheidung 8).
+  // Der Flash startet erst, wenn das Smooth-Scrolling zur Ruhe gekommen ist —
+  // sonst pulsiert die Zeile, während sie noch außerhalb des Sichtfelds ist,
+  // und der Nutzer verpasst das Aufleuchten.
+  const [flashMessageId, setFlashMessageId] = useState<string | null>(null);
+  // Punktgenauer Flash auf der Markierung selbst (Nutzerkorrektur 2026-07-22):
+  // weiches Ein-/Ausblenden statt Blinken (2. Korrektur am selben Tag).
+  // ::highlight()-Pseudoelemente sind nicht direkt animierbar — der Fade
+  // läuft über die registrierte Custom Property --syflo-flash-alpha
+  // (index.css): die Zeile bekommt data-flash-range, deren Keyframes
+  // animieren die Property, und die ::highlight-Regeln mischen ihre Farbe
+  // per color-mix damit.
+  const [flashRange, setFlashRange] = useState<{
+    messageId: string;
+    startOffset: number;
+    endOffset: number;
+    color: HighlightColor;
+  } | null>(null);
+  const flashTimersRef = useRef<number[]>([]);
+  const scrollSettleRafRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    flashTimersRef.current.forEach(t => window.clearTimeout(t));
+    if (scrollSettleRafRef.current !== null) cancelAnimationFrame(scrollSettleRafRef.current);
+  }, []);
+
+  const startFlash = (
+    messageId: string,
+    range?: { startOffset: number; endOffset: number; color: HighlightColor },
+  ) => {
+    flashTimersRef.current.forEach(t => window.clearTimeout(t));
+    flashTimersRef.current = [];
+    const schedule = (fn: () => void, ms: number) =>
+      flashTimersRef.current.push(window.setTimeout(fn, ms));
+
+    if (range) {
+      setFlashMessageId(null);
+      setFlashRange({ messageId, ...range });
+      // Der Fade selbst läuft in CSS (syflo-hl-range-flash) — hier nur noch
+      // nach Ablauf aufräumen.
+      schedule(() => setFlashRange(null), FLASH_MS);
+      return;
+    }
+    setFlashRange(null);
+    setFlashMessageId(messageId);
+    schedule(() => setFlashMessageId(null), FLASH_MS);
+  };
+
+  // Sprung + Flash — genutzt vom Highlights-Drawer (per Ref von außen) und
+  // von der Fragen-Navigation (Popover/Stepper/Shortcuts) hier drin. Die
+  // Fragen-Navigation springt OHNE Flash (Nutzerkorrektur 2026-07-22):
+  // beim bewussten Navigieren zwischen Fragen ist das Aufblinken nur Unruhe;
+  // der Flash bleibt den Highlight-Sprüngen aus dem Drawer vorbehalten.
+  const jumpToMessage = (
+    messageId: string,
+    range?: { startOffset: number; endOffset: number; color: HighlightColor },
+    opts?: { flash?: boolean },
+  ) => {
+      const container = scrollContainerRef.current;
+      const row = container?.querySelector(`[data-testid="message-row-${messageId}"]`);
+      if (!container || !row) return;
+      // Punktgenau: bei langen Nachrichten zur MARKIERUNG scrollen, nicht zur
+      // Zeilenmitte — sonst liegt die Markierung außerhalb des Sichtfelds
+      // (Nutzer-Report 2026-07-22). Ziel ist das Element um den Range-Anfang;
+      // ohne Auflösung (z. B. Inhalt noch nicht gerendert) fällt der Sprung
+      // auf die Zeile zurück.
+      let target: Element = row;
+      if (range) {
+        const root = row.querySelector('[data-chat-content]');
+        const resolved = root
+          ? rangeFromOffsets(root, range.startOffset, range.endOffset)
+          : null;
+        target = resolved?.startContainer.parentElement ?? row;
+      }
+      target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      if (opts?.flash === false) return;
+      // Auf Scroll-Ruhe warten: 3 Frames ohne Positionsänderung (deckt auch
+      // den Fall "war schon im Sichtfeld" ab), harter Deckel bei 2 s.
+      if (scrollSettleRafRef.current !== null) cancelAnimationFrame(scrollSettleRafRef.current);
+      const startedAt = performance.now();
+      let lastTop = container.scrollTop;
+      let stableFrames = 0;
+      const tick = () => {
+        const top = container.scrollTop;
+        if (top === lastTop) {
+          stableFrames++;
+        } else {
+          stableFrames = 0;
+          lastTop = top;
+        }
+        if (stableFrames >= 3 || performance.now() - startedAt > 2000) {
+          scrollSettleRafRef.current = null;
+          startFlash(messageId, range);
+          return;
+        }
+        scrollSettleRafRef.current = requestAnimationFrame(tick);
+      };
+      scrollSettleRafRef.current = requestAnimationFrame(tick);
+  };
+
+  useImperativeHandle(ref, () => ({ scrollToMessage: jumpToMessage }));
+
+  // ─── Fragen-Navigation (Grill 2026-07-22, mockup-question-nav.html 1+3) ───
+  // Jede User-Nachricht ist eine Frage; Scroll-Spy leitet die "aktuelle" live
+  // aus der Scroll-Position ab — eine Quelle für Stepper-Zähler und aktiven
+  // Popover-Eintrag.
+  const questions = useMemo(
+    () => (chat ? deriveQuestions(chat.messages) : []),
+    [chat?.messages],
+  );
+  const [activeQuestion, setActiveQuestion] = useState(-1);
+  const [listOverflows, setListOverflows] = useState(false);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el) return;
+    const measure = () => {
+      setListOverflows(el.scrollHeight > el.clientHeight);
+      if (questions.length === 0) {
+        setActiveQuestion(-1);
+        return;
+      }
+      const cTop = el.getBoundingClientRect().top;
+      const tops = questions.map((q) => {
+        const row = el.querySelector(`[data-testid="message-row-${q.messageId}"]`);
+        return row ? row.getBoundingClientRect().top - cTop + el.scrollTop : Number.POSITIVE_INFINITY;
+      });
+      setActiveQuestion(currentQuestionIndex(tops, el.scrollTop + el.clientHeight / 2));
+    };
+    measure();
+    el.addEventListener('scroll', measure, { passive: true });
+    window.addEventListener('resize', measure);
+    return () => {
+      el.removeEventListener('scroll', measure);
+      window.removeEventListener('resize', measure);
+    };
+  }, [chat?.id, questions]);
+
+  const jumpToQuestion = (index: number) => {
+    const q = questions[Math.max(0, Math.min(questions.length - 1, index))];
+    if (q) jumpToMessage(q.messageId, undefined, { flash: false });
+  };
+
+  // Alt+↑/↓ — global, aber stumm, solange ein Eingabefeld fokussiert ist
+  // (Grill-Entscheidung 5): beim Tippen gewinnt der native Cursor.
+  useEffect(() => {
+    if (questions.length < 2) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      jumpToQuestion(activeQuestion + (e.key === 'ArrowUp' ? -1 : 1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [questions, activeQuestion]);
+
   // Empty state: shown when no chat is selected.
   if (!chat) {
     return (
-      <div className="flex-1 flex items-center justify-center bg-white">
+      <div className="syflo-chat-pane flex-1 flex items-center justify-center bg-white">
         <div className="text-center max-w-lg px-8">
-          <h2 className="text-[32px] font-serif text-gray-800 mb-3 tracking-tight">How can I help you today?</h2>
+          {/* Theme-Logo über dem Titel, leicht vergrößert (Nutzerwunsch
+              2026-07-22) — jedes Theme zeigt seine eigene Logo-Variante. */}
+          <div className="flex justify-center mb-6" data-testid="empty-state-logo">
+            <Logo scale={1.6} />
+          </div>
+          <h2 className="syflo-empty-title text-[32px] font-serif text-gray-800 mb-3 tracking-tight">How can I help you today?</h2>
           <p className="text-gray-500 text-[15px] leading-relaxed">Select a chat from the sidebar or start a new one.</p>
         </div>
       </div>
@@ -403,21 +713,68 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
   }
 
   return (
-    <div className="flex-1 flex flex-col bg-white overflow-hidden relative">
-      {/* Header: chat title. Bei Branch-Chats entfällt er komplett — der
-          Titel ("About: <Auswahl>") wäre nur eine Dublette des aufklappbaren
-          "Branched from"-Zitats direkt darunter. */}
-      {!(chat.parent_word && chat.parent_id) && (
-        <div className="border-b border-gray-100 bg-white">
-          <div className="flex justify-center">
-            <div className={`${chatColumnClass} py-7`} style={chatColumnStyle} data-testid="chat-header-shell">
-              <h2 className="font-semibold text-gray-900 text-base break-words line-clamp-2" title={chat.title}>
-                {chat.title}
-              </h2>
-            </div>
+    <div className="syflo-chat-pane flex-1 flex flex-col bg-white overflow-hidden relative">
+      {/* Header: permanent für alle Chats (Grill 2026-07-21, Entscheidung 5) —
+          der Highlights-Knopf braucht einen festen Ort. Bei Branch-Chats
+          schmaler, weil das "Branched from"-Zitat den Kontext trägt. */}
+      {/* @container: in schmalen Spalten macht sich der Header kompakt —
+          der Titel reserviert Platz für den Highlights-Knopf (statt darunter
+          zu laufen), und der Knopf wird unter 30rem zum reinen Icon
+          (Nutzerkorrektur 2026-07-22). */}
+      {/* z-20: @container setzt contain:layout und KAPSELT damit den z-Index
+          des Fragen-Popovers ein — ohne eigenes z-Level übermalen die später
+          im DOM folgenden (positionierten) Nachrichten-Container das Popover
+          (Nutzer-Screenshot 2026-07-22, Matrix-Theme). */}
+      <div className="relative z-20 border-b border-gray-100 bg-white @container">
+        <div className="flex justify-center">
+          <div
+            className={`${chatColumnClass} ${chat.parent_word && chat.parent_id ? 'py-3' : 'py-7'}`}
+            style={chatColumnStyle}
+            data-testid="chat-header-shell"
+          >
+            <h2
+              className={`font-semibold text-gray-900 break-words line-clamp-2 ${chat.parent_word && chat.parent_id ? 'text-sm' : 'text-base'} ${onToggleHighlights || questions.length >= 2 ? (onToggleHighlights && questions.length >= 2 ? 'pr-56 @max-[30rem]:pr-16' : 'pr-32 @max-[30rem]:pr-8') : ''}`}
+              title={chat.title}
+            >
+              {chat.title}
+            </h2>
           </div>
         </div>
-      )}
+        {(onToggleHighlights || questions.length >= 2) && (
+          <div className="absolute right-3 top-1/2 flex -translate-y-1/2 items-center gap-2">
+            <QuestionNavButton
+              questions={questions}
+              activeIndex={activeQuestion}
+              onJump={(id) => jumpToMessage(id, undefined, { flash: false })}
+            />
+            {onToggleHighlights && (
+              <button
+                type="button"
+                aria-pressed={highlightsOpen ?? false}
+                title="Show all highlights of this tree"
+                onClick={onToggleHighlights}
+                className={`flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[12.5px] font-medium transition-colors ${
+                  highlightsOpen
+                    ? 'bg-blue-50 text-blue-700'
+                    : 'border border-gray-200 text-gray-500 hover:bg-gray-100 hover:text-gray-700'
+                }`}
+              >
+                <Highlighter size={14} />
+                <span className="@max-[30rem]:hidden">Highlights</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Geerbter Kontext als Banner + Inline-Akkordeon (Variante 3a):
+          sitzt fest unter dem Header, die Nachrichten scrollen darunter. */}
+      {ancestors && ancestors.length > 0 && <InheritedContextBanner ancestors={ancestors} />}
+
+      {/* Alles unterhalb des Headers in einem relativen Container, damit der
+          Highlights-Drawer sich exakt darüberlegen kann — der Header (und
+          damit sein Toggle-Knopf) bleibt frei. */}
+      <div className="relative flex-1 min-h-0 flex flex-col">
 
       {/* Message list */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
@@ -447,11 +804,14 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                   <span
                     role="link"
                     tabIndex={0}
-                    onClick={() => onSelectChat(chat.parent_id!)}
+                    onClick={() =>
+                      onBranchedFromClick ? onBranchedFromClick() : onSelectChat(chat.parent_id!)
+                    }
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        onSelectChat(chat.parent_id!);
+                        if (onBranchedFromClick) onBranchedFromClick();
+                        else onSelectChat(chat.parent_id!);
                       }
                     }}
                     className="cursor-pointer text-blue-600 underline underline-offset-2 hover:text-blue-800 font-medium transition-colors"
@@ -489,16 +849,36 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                 <div
                   key={msg.id}
                   data-testid={`message-row-${msg.id}`}
-                  style={{ marginTop: i === 0 ? 0 : '2rem' }}
+                  data-flash={flashMessageId === msg.id ? 'true' : undefined}
+                  // Testbarer Marker für den punktgenauen Markierungs-Flash —
+                  // jsdom hat keine Custom Highlight API, das Malen no-opt dort.
+                  data-flash-range={flashRange?.messageId === msg.id ? 'true' : undefined}
+                  className={flashMessageId === msg.id ? 'syflo-hl-flash rounded-xl' : undefined}
+                  style={{
+                    marginTop: i === 0 ? 0 : '2rem',
+                    // Glow in Blau (Nutzerkorrektur 2026-07-21: Glow statt
+                    // Ring) — die Zeile hat keine eigene Highlight-Farbe.
+                    ...(flashMessageId === msg.id
+                      ? ({ '--flash-color': '#2563EB' } as React.CSSProperties)
+                      : null),
+                  }}
                 >
                   <MessageBubble
                     message={msg}
                     isStreaming={isLastAssistant && (sending || streaming)}
+                    showThinkingTips={isLastAssistant}
                     onWordRightClick={(word, context, x, y) =>
                       onWordRightClick({ word, context, x, y })
                     }
                     branchWords={branchWords}
                     onBranchClick={onSelectChat}
+                    highlights={chatHighlights}
+                    onChatSelection={onChatSelection}
+                    onHighlightContextMenu={onHighlightContextMenu}
+                    pendingSelection={pendingSelection}
+                    flashRange={
+                      flashRange && flashRange.messageId === msg.id ? flashRange : null
+                    }
                   />
                 </div>
               );
@@ -521,8 +901,38 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
         </button>
       )}
 
-      {/* Input area — full width */}
-      <div className="bg-white pb-6 pt-3 relative">
+      {/* Fragen-Stepper — schwebt rechts über dem Composer, sobald die Liste
+          überläuft (Grill-Entscheidung 3); unter 2 Fragen gäbe es nichts zu
+          steppen. Gleiche Höhe wie der "Scroll to latest"-Knopf. */}
+      {listOverflows && questions.length >= 2 && (
+        <div className="absolute right-4 bottom-32 z-10">
+          <QuestionStepper
+            activeIndex={activeQuestion}
+            total={questions.length}
+            onJumpTo={jumpToQuestion}
+          />
+        </div>
+      )}
+
+      {/* Input area — full width. Nimmt Drag-and-drop von Dateien entgegen
+          (gleiche Typen wie der Datei-Picker); das Overlay zeigt die Drop-Zone. */}
+      <div
+        className="bg-white pb-6 pt-3 relative"
+        onDragEnter={handleDragEnter}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        data-testid="chat-input-dropzone"
+      >
+        {isDraggingFiles && (
+          <div
+            className="pointer-events-none absolute inset-2 z-20 flex items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-blue-400 bg-blue-50/90 text-blue-600"
+            data-testid="chat-drop-overlay"
+          >
+            <ImagePlus size={18} strokeWidth={1.9} />
+            <span className="text-sm font-medium">Drop files to attach</span>
+          </div>
+        )}
         <div className="flex justify-center">
           <div className={`${chatColumnClass} @container`} style={chatColumnStyle} data-testid="chat-input-shell">
             {/* Anhang-Chips über dem Eingabefeld */}
@@ -570,6 +980,41 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
               </div>
             )}
 
+            {/* "Ask in chat"-Zitatblock — dockt über dem Eingabefeld an
+                (mockup-chat-highlights-ask-in-chat.html, Sektion 02):
+                Farbbalken in der Highlight-Farbe (neutral grau ohne Farbe),
+                Quellenzeile, ×-Button. Entfernen löscht nie das Highlight. */}
+            {composerQuote && (
+              <div
+                className="mb-2 mx-2 flex items-start gap-2.5 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2"
+                data-testid="composer-quote"
+              >
+                <span
+                  aria-hidden="true"
+                  className="self-stretch w-[3px] rounded-full shrink-0"
+                  style={{ background: composerQuote.color ? HIGHLIGHT_HEX[composerQuote.color] : '#CBD5E1' }}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-[12.5px] leading-relaxed text-gray-700 line-clamp-3">
+                    {composerQuote.text}
+                  </p>
+                  <p className="mt-0.5 flex items-center gap-1 text-[11px] font-medium text-gray-400">
+                    <MessageSquareQuote size={11} className="shrink-0" />
+                    <span className="truncate">from "{composerQuote.sourceLabel}"</span>
+                  </p>
+                </div>
+                <button
+                  onClick={onClearComposerQuote}
+                  title="Remove quote"
+                  aria-label="Remove quote"
+                  data-testid="composer-quote-remove"
+                  className="shrink-0 p-1 rounded-md text-gray-400 hover:text-gray-700 hover:bg-gray-100 transition-colors"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            )}
+
             {/* Sprach-Wellen — eigene Zeile ÜBER dem Eingabefeld, damit das
                 Eingabefeld nicht größer wird, sondern in Ruhe bleibt. */}
             {isListening && (
@@ -613,7 +1058,7 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                       ? 'text-gray-900 bg-gray-100'
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                   }`}
-                  title="Anhängen"
+                  title="Attach"
                   data-testid="attach-plus-button"
                 >
                   <Plus size={20} strokeWidth={1.75} />
@@ -672,7 +1117,7 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                   value={input}
                   onChange={handleInputChange}
                   onKeyDown={handleKeyDown}
-                  placeholder={isListening ? '' : 'Ask anything'}
+                  placeholder={isListening ? '' : composerQuote ? 'Ask about this…' : 'Ask anything'}
                   rows={1}
                   disabled={isBusy}
                   readOnly={isListening}
@@ -685,7 +1130,7 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                     className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 max-w-[calc(100%-1rem)] truncate text-[16px] leading-[1.5] text-gray-400"
                     data-testid="chat-textarea-placeholder"
                   >
-                    Ask anything
+                    {composerQuote ? 'Ask about this…' : 'Ask anything'}
                   </span>
                 )}
               </div>
@@ -696,11 +1141,11 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
               {supported && (
                 <button
                   onClick={handleToggleListening}
-                  title={isListening ? 'Aufnahme beenden' : 'Aufnahme starten'}
+                  title={isListening ? 'Stop recording' : 'Start recording'}
                   aria-pressed={isListening}
                   className={`shrink-0 w-9 h-9 @max-[24rem]:hidden flex items-center justify-center rounded-full transition-colors ${
                     isListening
-                      ? 'text-white bg-red-500 hover:bg-red-600'
+                      ? 'text-white bg-blue-500 hover:bg-blue-600'
                       : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'
                   }`}
                   data-testid="mic-button"
@@ -709,17 +1154,42 @@ export function ChatArea({ chat, loading, streaming, onSendMessage, onWordRightC
                 </button>
               )}
 
-              <button
-                onClick={handleSend}
-                disabled={isBusy || isListening || (!input.trim() && attachments.length === 0)}
-                title="Send"
-                className="shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-blue-600 text-white transition-all hover:bg-blue-700 disabled:opacity-30 disabled:cursor-not-allowed"
-              >
-                <ArrowUp size={20} strokeWidth={2.25} />
-              </button>
+              {modelPicker}
+
+              {(sending || streaming) && onStopStreaming ? (
+                // Bewusst dieselben Klassen wie der Senden-Knopf (bg-blue-600
+                // rounded-full): nur so greifen die Theme-Overrides in
+                // index.css (Question-Block, Sticker-Schatten, Phosphor-Glow)
+                // auch für den Stop-Zustand — ein hartes Rot fiele aus jedem
+                // Theme heraus (Nutzerkorrektur 2026-07-22).
+                <button
+                  onClick={onStopStreaming}
+                  title="Stop response"
+                  aria-label="Stop response"
+                  data-testid="stop-button"
+                  className="shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-blue-600 text-white transition-all hover:bg-blue-700"
+                >
+                  <Square size={13} fill="currentColor" strokeWidth={0} />
+                </button>
+              ) : (
+                <button
+                  onClick={handleSend}
+                  disabled={isBusy || isListening || (!input.trim() && attachments.length === 0)}
+                  title="Send"
+                  className="shrink-0 w-9 h-9 flex items-center justify-center rounded-full bg-blue-600 text-white transition-all hover:bg-blue-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  <ArrowUp size={20} strokeWidth={2.25} />
+                </button>
+              )}
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Highlights-Drawer über Nachrichtenliste + Composer (Slot vom Owner).
+          Innerhalb des relativen Containers, damit der Header sichtbar bleibt. */}
+      {highlightsDrawer}
+
       </div>
     </div>
   );

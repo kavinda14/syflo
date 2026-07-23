@@ -24,9 +24,29 @@ interface Props {
   onContextMenu: (id: string, x: number, y: number) => void;
   onRenameSubmit: (id: string, title: string) => void;
   onRenameCancel: () => void;
+  // Chats, in denen gerade eine Antwort im Hintergrund generiert wird —
+  // ihre Zeilen zeigen die kleinen animierten Punkte.
+  streamingChatIds?: Set<string>;
 }
 
-function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onRenameSubmit, onRenameCancel }: {
+// Drei hüpfende Mini-Punkte (kompakte Variante der Chat-Ladepunkte) — zeigt
+// in der Sidebar an, dass dieser Chat gerade eine Antwort generiert.
+export function StreamingDots() {
+  return (
+    <span
+      className="syflo-typing syflo-typing-sm shrink-0"
+      role="status"
+      aria-label="Response in progress"
+      data-testid="sidebar-streaming-dots"
+    >
+      <span className="syflo-typing-dot" />
+      <span className="syflo-typing-dot" />
+      <span className="syflo-typing-dot" />
+    </span>
+  );
+}
+
+function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onRenameSubmit, onRenameCancel, streamingChatIds }: {
   chat: Chat;
   activeChatId: string | null;
   renamingId: string | null;
@@ -34,6 +54,7 @@ function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onR
   onContextMenu: (id: string, x: number, y: number) => void;
   onRenameSubmit: (id: string, title: string) => void;
   onRenameCancel: () => void;
+  streamingChatIds?: Set<string>;
 }) {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = chat.children && chat.children.length > 0;
@@ -79,6 +100,9 @@ function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onR
           <span className="flex-1 truncate text-[13px]">{chat.title}</span>
         )}
 
+        {/* Laufende Hintergrund-Antwort in diesem Chat */}
+        {!isRenaming && streamingChatIds?.has(chat.id) && <StreamingDots />}
+
         {/* PDF tag on the root of a tree with a bound paper
             (design/mockup-pdf-layout.html, ADR-0002) */}
         {!isRenaming && chat.paper_id && (
@@ -122,6 +146,7 @@ function TreeNode({ chat, activeChatId, renamingId, onSelect, onContextMenu, onR
                   onContextMenu={onContextMenu}
                   onRenameSubmit={onRenameSubmit}
                   onRenameCancel={onRenameCancel}
+                  streamingChatIds={streamingChatIds}
                 />
               </div>
             );
@@ -169,7 +194,7 @@ export function RenameInput({ initial, onSubmit, onCancel }: {
   );
 }
 
-export function ChatTree({ chats, activeChatId, renamingId, onSelect, onContextMenu, onRenameSubmit, onRenameCancel }: Props) {
+export function ChatTree({ chats, activeChatId, renamingId, onSelect, onContextMenu, onRenameSubmit, onRenameCancel, streamingChatIds }: Props) {
   return (
     <div>
       {chats.map(chat => (
@@ -182,6 +207,7 @@ export function ChatTree({ chats, activeChatId, renamingId, onSelect, onContextM
           onContextMenu={onContextMenu}
           onRenameSubmit={onRenameSubmit}
           onRenameCancel={onRenameCancel}
+          streamingChatIds={streamingChatIds}
         />
       ))}
     </div>

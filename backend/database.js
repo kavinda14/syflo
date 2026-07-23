@@ -102,6 +102,23 @@ function createDb(dbPath = DB_PATH) {
     CREATE INDEX IF NOT EXISTS idx_highlights_chat ON highlights(chat_id);
     CREATE INDEX IF NOT EXISTS idx_highlights_text_range ON highlights(text_range_id);
 
+    -- Chat-Text-Highlights (design/mockup-chat-highlights-ask-in-chat.html).
+    -- Anders als PDF-Highlights (text_ranges.bbox_json, geometrisch) ankern
+    -- sie an message_id + Zeichen-Offsets in den gerenderten Klartext der
+    -- Nachricht (textContent der Bubble) — dadurch reflow-sicher. text hält
+    -- den markierten Wortlaut zur Verifikation beim Re-Anchoring.
+    CREATE TABLE IF NOT EXISTS message_highlights (
+      id TEXT PRIMARY KEY,
+      message_id TEXT NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+      start_offset INTEGER NOT NULL,
+      end_offset INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      color TEXT NOT NULL CHECK(color IN ('yellow','green','blue','pink','orange')),
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_message_highlights_message ON message_highlights(message_id);
+
     -- Globale Farb-Labels — eine Zeile pro Farbe, vom Nutzer umbenennbar
     -- (Slice 05). Seeds unten via INSERT OR IGNORE, damit Umbenennungen
     -- Backend-Neustarts überleben.
@@ -132,6 +149,25 @@ function createDb(dbPath = DB_PATH) {
   const chatsCols = db.prepare('PRAGMA table_info(chats)').all();
   if (!chatsCols.some((c) => c.name === 'paper_id')) {
     db.exec('ALTER TABLE chats ADD COLUMN paper_id TEXT REFERENCES papers(id) ON DELETE SET NULL');
+  }
+
+  // Migration: chats.summary + chats.summary_last_message_id — gecachte
+  // LLM-Zusammenfassung des Chats für den geerbten Vorfahren-Kontext von
+  // Branches. Reiner Cache (jederzeit regenerierbar); summary_last_message_id
+  // hält die id der letzten abgedeckten Nachricht für den Staleness-Check.
+  if (!chatsCols.some((c) => c.name === 'summary')) {
+    db.exec('ALTER TABLE chats ADD COLUMN summary TEXT');
+  }
+  if (!chatsCols.some((c) => c.name === 'summary_last_message_id')) {
+    db.exec('ALTER TABLE chats ADD COLUMN summary_last_message_id TEXT');
+  }
+
+  // Migration: chats.summary_display — JSON {gist, points[]} für die
+  // Kontext-Banner-Anzeige (mockup-context-banner-variants.html §01).
+  // Reine Anzeige-Ableitung der Summary, geht NICHT in den Prompt; null bei
+  // alten Summaries → das UI fällt auf den gerenderten Volltext zurück.
+  if (!chatsCols.some((c) => c.name === 'summary_display')) {
+    db.exec('ALTER TABLE chats ADD COLUMN summary_display TEXT');
   }
 
   // Migration: papers.extracted_text — lazily filled plain-text cache of the

@@ -20,14 +20,23 @@ describe('Sidebar', () => {
     onRename: vi.fn(),
     viewMode: 'chat' as const,
     onToggleView: vi.fn(),
-    settings: null,
-    onSettingsChange: vi.fn(),
+    onOpenSettings: vi.fn(),
+    collapsed: false,
+    onToggleCollapsed: vi.fn(),
   };
 
   it('renders root chat titles', () => {
     render(<Sidebar {...defaultProps} />);
     expect(screen.getByText('First Chat')).toBeInTheDocument();
     expect(screen.getByText('Second Chat')).toBeInTheDocument();
+  });
+
+  it('has no "Active model" box in the footer — the composer pill owns that', () => {
+    // mockup-model-picker.html, Sektion 01: nur noch das Zahnrad im Footer.
+    render(<Sidebar {...defaultProps} />);
+    expect(screen.queryByText(/Active model/i)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText('Open settings'));
+    expect(defaultProps.onOpenSettings).toHaveBeenCalledWith('appearance');
   });
 
   it('does not show child chats in default flat view', () => {

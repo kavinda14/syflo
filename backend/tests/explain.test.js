@@ -71,6 +71,8 @@ describe('POST /api/explain – success', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.explanation).toBe('Quantum is the smallest discrete unit of energy.');
+    // Definitionen müssen sofort kommen — Denk-Modelle dürfen hier nie grübeln.
+    expect(mockCreate.mock.calls[0][0].reasoning_effort).toBe('none');
   });
 
   it('passes context to the model when provided', async () => {

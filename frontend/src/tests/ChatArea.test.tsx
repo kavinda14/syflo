@@ -1,6 +1,7 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { ChatArea } from '../components/ChatArea';
+import { createRef } from 'react';
+import { ChatArea, type ChatAreaHandle } from '../components/ChatArea';
 import type { ChatDetail } from '../types';
 
 const mockChat: ChatDetail = {
@@ -66,10 +67,124 @@ describe('ChatArea', () => {
     expect(screen.getByText(/quantum/i)).toBeInTheDocument();
   });
 
-  it('hides the title header in branch chats (the branched-from quote carries it)', () => {
+  // Spec-Änderung 2026-07-21 (Highlights-Drawer, Grill-Entscheidung 5): der
+  // Header ist jetzt PERMANENT — auch bei Branch-Chats —, damit der
+  // Highlights-Knopf einen festen Ort hat.
+  it('zeigt den Header auch bei Branch-Chats (permanenter Header)', () => {
     const childChat = { ...mockChat, parent_word: 'quantum', parent_id: '0' };
     render(<ChatArea chat={childChat} loading={false} {...defaultProps} />);
-    expect(screen.queryByTestId('chat-header-shell')).not.toBeInTheDocument();
+    expect(screen.getByTestId('chat-header-shell')).toBeInTheDocument();
+  });
+
+  it('ruft onToggleHighlights beim Klick auf den Highlights-Knopf im Header', () => {
+    const onToggleHighlights = vi.fn();
+    render(
+      <ChatArea
+        chat={mockChat}
+        loading={false}
+        {...defaultProps}
+        onToggleHighlights={onToggleHighlights}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /highlights/i }));
+    expect(onToggleHighlights).toHaveBeenCalled();
+  });
+
+  it('bietet ohne onToggleHighlights keinen Highlights-Knopf an', () => {
+    render(<ChatArea chat={mockChat} loading={false} {...defaultProps} />);
+    expect(screen.queryByRole('button', { name: /highlights/i })).toBeNull();
+  });
+
+  it('scrollToMessage scrollt zur Nachricht und lässt die Zeile ~1,5 s aufblinken', () => {
+    const scrollIntoView = vi.fn();
+    const original = window.HTMLElement.prototype.scrollIntoView;
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    const ref = createRef<ChatAreaHandle>();
+    render(<ChatArea ref={ref} chat={mockChat} loading={false} {...defaultProps} />);
+
+    vi.useFakeTimers();
+    try {
+      act(() => ref.current!.scrollToMessage('m1'));
+
+      expect(scrollIntoView).toHaveBeenCalled();
+      const row = screen.getByTestId('message-row-m1');
+      // Der Flash startet erst nach Scroll-Ruhe (3 stabile rAF-Frames,
+      // Nutzerkorrektur 2026-07-22) — sonst verpasst man das Aufblinken,
+      // während die Zeile noch ins Sichtfeld scrollt. In jsdom bleibt
+      // scrollTop konstant, also gilt der Scroll nach ~4 Frames als ruhig.
+      expect(row).not.toHaveAttribute('data-flash');
+      act(() => {
+        vi.advanceTimersByTime(100);
+      });
+      expect(row).toHaveAttribute('data-flash', 'true');
+
+      act(() => {
+        vi.advanceTimersByTime(1600);
+      });
+      expect(row).not.toHaveAttribute('data-flash');
+    } finally {
+      vi.useRealTimers();
+      window.HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('scrollToMessage mit Range scrollt zur Markierung selbst, nicht nur zur Zeile', () => {
+    // Bei langen Nachrichten liegt die Markierung sonst außerhalb des
+    // Sichtfelds, obwohl die Zeile zentriert wurde (Nutzer-Report 2026-07-22).
+    const scrollIntoView = vi.fn();
+    const original = window.HTMLElement.prototype.scrollIntoView;
+    window.HTMLElement.prototype.scrollIntoView = scrollIntoView;
+    try {
+      const longChat: ChatDetail = {
+        ...mockChat,
+        messages: [
+          ...mockChat.messages,
+          {
+            id: 'm9',
+            chat_id: '1',
+            role: 'assistant',
+            content:
+              'Intro paragraph that goes on for a while.\n\nSecond paragraph.\n\nThe marked passage sits far down in a very long message.',
+            created_at: new Date().toISOString(),
+          },
+        ],
+      };
+      const ref = createRef<ChatAreaHandle>();
+      render(<ChatArea ref={ref} chat={longChat} loading={false} {...defaultProps} />);
+
+      const row = screen.getByTestId('message-row-m9');
+      const root = row.querySelector('[data-chat-content]')!;
+      const text = root.textContent ?? '';
+      const start = text.indexOf('marked passage');
+      act(() =>
+        ref.current!.scrollToMessage('m9', {
+          startOffset: start,
+          endOffset: start + 'marked passage'.length,
+          color: 'green',
+        }),
+      );
+
+      expect(scrollIntoView).toHaveBeenCalled();
+      const target = scrollIntoView.mock.instances.at(-1) as HTMLElement;
+      expect(target).not.toBe(row);
+      expect(target.textContent).toContain('marked passage');
+    } finally {
+      window.HTMLElement.prototype.scrollIntoView = original;
+    }
+  });
+
+  it('rendert den highlightsDrawer-Slot über dem Chat-Inhalt', () => {
+    render(
+      <ChatArea
+        chat={mockChat}
+        loading={false}
+        {...defaultProps}
+        highlightsDrawer={<div data-testid="drawer-stub">drawer</div>}
+      />,
+    );
+    expect(screen.getByTestId('drawer-stub')).toBeInTheDocument();
+    // Chat bleibt gemountet (Scroll-Position/Streaming gehen nicht verloren).
+    expect(screen.getByText('Hello there')).toBeInTheDocument();
   });
 
   it('clamps a long branched-from quote and expands it via the chevron', async () => {
@@ -137,11 +252,11 @@ describe('ChatArea', () => {
     const inputWrapper = inputShell.parentElement as HTMLElement;
 
     expect(headerWrapper.className).toContain('justify-center');
-    expect(headerShell).toHaveStyle({ width: '46rem', maxWidth: 'calc(100% - 3rem)' });
+    expect(headerShell).toHaveStyle({ width: '46rem', maxWidth: '100%' });
     expect(contentWrapper.className).toContain('justify-center');
-    expect(contentShell).toHaveStyle({ width: '46rem', maxWidth: 'calc(100% - 3rem)' });
+    expect(contentShell).toHaveStyle({ width: '46rem', maxWidth: '100%' });
     expect(inputWrapper.className).toContain('justify-center');
-    expect(inputShell).toHaveStyle({ width: '46rem', maxWidth: 'calc(100% - 3rem)' });
+    expect(inputShell).toHaveStyle({ width: '46rem', maxWidth: '100%' });
   });
 
   describe('Anhang-Plus-Menü', () => {
@@ -187,6 +302,67 @@ describe('ChatArea', () => {
       render(<ChatArea chat={mockChat} loading={false} {...defaultProps} />);
       fireEvent.click(screen.getByTestId('attach-plus-button'));
       expect(screen.queryByTestId('attach-menu-upload-pdf')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('Drag-and-drop von Dateien ins Eingabefeld', () => {
+    // Hilfsobjekt: minimales DataTransfer-Substitut, das jsdom fehlt.
+    const dataTransferWith = (files: File[]) => ({
+      types: ['Files'],
+      files,
+      dropEffect: 'none',
+    });
+
+    it('zeigt das Drop-Overlay beim Hereinziehen und blendet es beim Verlassen aus', () => {
+      render(<ChatArea chat={mockChat} loading={false} {...defaultProps} />);
+      const zone = screen.getByTestId('chat-input-dropzone');
+      const dt = dataTransferWith([new File(['x'], 'cat.png', { type: 'image/png' })]);
+
+      fireEvent.dragEnter(zone, { dataTransfer: dt });
+      expect(screen.getByTestId('chat-drop-overlay')).toBeInTheDocument();
+
+      fireEvent.dragLeave(zone, { dataTransfer: dt });
+      expect(screen.queryByTestId('chat-drop-overlay')).not.toBeInTheDocument();
+    });
+
+    it('fügt ein gedropptes Bild als Anhang mit @foto-Alias hinzu', async () => {
+      render(<ChatArea chat={mockChat} loading={false} {...defaultProps} />);
+      const zone = screen.getByTestId('chat-input-dropzone');
+      const dt = dataTransferWith([new File(['x'], 'cat.png', { type: 'image/png' })]);
+
+      fireEvent.dragEnter(zone, { dataTransfer: dt });
+      fireEvent.drop(zone, { dataTransfer: dt });
+
+      expect(await screen.findByTestId('attachment-alias')).toHaveTextContent('@foto1');
+      // Overlay verschwindet nach dem Drop
+      expect(screen.queryByTestId('chat-drop-overlay')).not.toBeInTheDocument();
+    });
+
+    it('ignoriert nicht unterstützte Dateitypen beim Drop', () => {
+      render(<ChatArea chat={mockChat} loading={false} {...defaultProps} />);
+      const zone = screen.getByTestId('chat-input-dropzone');
+      const dt = dataTransferWith([new File(['x'], 'app.exe', { type: 'application/octet-stream' })]);
+
+      fireEvent.dragEnter(zone, { dataTransfer: dt });
+      fireEvent.drop(zone, { dataTransfer: dt });
+
+      expect(screen.queryByTestId('attachment-alias')).not.toBeInTheDocument();
+    });
+
+    it('flackert nicht, wenn der Drag über Kind-Elemente wandert (Tiefenzähler)', () => {
+      render(<ChatArea chat={mockChat} loading={false} {...defaultProps} />);
+      const zone = screen.getByTestId('chat-input-dropzone');
+      const inner = screen.getByTestId('chat-input-shell');
+      const dt = dataTransferWith([new File(['x'], 'cat.png', { type: 'image/png' })]);
+
+      fireEvent.dragEnter(zone, { dataTransfer: dt });
+      fireEvent.dragEnter(inner, { dataTransfer: dt });
+      fireEvent.dragLeave(inner, { dataTransfer: dt });
+      // Ein Kind wurde verlassen, die Zone selbst nicht → Overlay bleibt.
+      expect(screen.getByTestId('chat-drop-overlay')).toBeInTheDocument();
+
+      fireEvent.dragLeave(zone, { dataTransfer: dt });
+      expect(screen.queryByTestId('chat-drop-overlay')).not.toBeInTheDocument();
     });
   });
 

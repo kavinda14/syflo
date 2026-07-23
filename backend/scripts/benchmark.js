@@ -1,0 +1,148 @@
+#!/usr/bin/env node
+/**
+ * scripts/benchmark.js — Latenz-Benchmark gegen das laufende Backend.
+ *
+ * Misst pro Durchlauf, was der Nutzer spürt:
+ *   - warmup_ms:  Dauer des Prefix-Warm-ups (Prefill des Paper-Kontexts)
+ *   - ttft_ms:    Zeit bis zum ersten sichtbaren Token (Client-Sicht)
+ *   - perf-Event: prompt_tokens / gen_tokens / tok_s aus dem Backend
+ *
+ * Der erste Durchlauf nach einem Ollama-(Neu-)Start ist der Kalt-Fall; alle
+ * weiteren treffen auf den warmen KV-Cache. Für echte Kalt-Messungen Ollama
+ * zwischen den Läufen neu starten.
+ *
+ * Usage:
+ *   node scripts/benchmark.js                       # frischer Wegwerf-Chat
+ *   node scripts/benchmark.js --chat <id>           # bestehender Chat (z. B. mit Paper)
+ *   node scripts/benchmark.js --runs 5 --think      # 5 Läufe, Thinking an
+ *   node scripts/benchmark.js --prompt "Summarize the paper"
+ */
+
+const BASE = process.env.SYFLO_API || 'http://localhost:3001/api';
+
+function parseArgs(argv) {
+  const args = { runs: 3, think: false, chat: null, prompt: 'Reply with one short sentence about the main topic of this conversation.' };
+  for (let i = 2; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === '--runs') args.runs = parseInt(argv[++i], 10) || 3;
+    else if (a === '--think') args.think = true;
+    else if (a === '--chat') args.chat = argv[++i];
+    else if (a === '--prompt') args.prompt = argv[++i];
+    else if (a === '--help' || a === '-h') {
+      console.log('Usage: node scripts/benchmark.js [--chat <id>] [--runs N] [--think] [--prompt "..."]');
+      process.exit(0);
+    }
+  }
+  return args;
+}
+
+// Ein SSE-Stream, wie ihn POST /chats/:id/messages liefert: misst die Zeit
+// bis zum ersten delta/reasoning-Event und sammelt das perf-Event ein.
+async function sendAndMeasure(chatId, prompt, think) {
+  const startedAt = Date.now();
+  const res = await fetch(`${BASE}/chats/${chatId}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content: prompt, think }),
+  });
+  if (!res.ok) throw new Error(`send failed: HTTP ${res.status}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let ttftMs = null;
+  let perf = null;
+  let chars = 0;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+    for (const line of lines) {
+      if (!line.startsWith('data: ')) continue;
+      const data = JSON.parse(line.slice(6));
+      if (data.error) throw new Error(data.error);
+      if ((data.delta || data.reasoning) && ttftMs === null) ttftMs = Date.now() - startedAt;
+      if (data.delta) chars += data.delta.length;
+      if (data.perf) perf = data.perf;
+    }
+  }
+  return { ttftMs, totalMs: Date.now() - startedAt, chars, perf };
+}
+
+async function warmup(chatId) {
+  const startedAt = Date.now();
+  const res = await fetch(`${BASE}/chats/${chatId}/messages/warmup`, { method: 'POST' });
+  const body = await res.json().catch(() => ({}));
+  return { ms: Date.now() - startedAt, ...body };
+}
+
+function fmt(v, suffix = '') {
+  return v === null || v === undefined ? '—' : `${v}${suffix}`;
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+
+  let chatId = args.chat;
+  let createdChat = false;
+  if (!chatId) {
+    const res = await fetch(`${BASE}/chats`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Benchmark' }),
+    });
+    if (!res.ok) throw new Error(`could not create chat: HTTP ${res.status}`);
+    chatId = (await res.json()).id;
+    createdChat = true;
+    console.log(`Wegwerf-Chat angelegt: ${chatId} (Tipp: --chat <id> für einen echten Paper-Chat)`);
+  }
+
+  console.log(`Backend: ${BASE} | Chat: ${chatId} | Läufe: ${args.runs} | Thinking: ${args.think ? 'an' : 'aus'}`);
+  console.log('Hinweis: Lauf 1 zahlt den Prefill (kalt), ab Lauf 2 sollte der KV-Cache greifen.\n');
+
+  const rows = [];
+  try {
+    for (let run = 1; run <= args.runs; run++) {
+      const w = await warmup(chatId);
+      if (w.gpu && w.gpu.vramPercent < 100) {
+        console.warn(`ACHTUNG: Modell nur zu ${w.gpu.vramPercent}% im GPU-Speicher — CPU-Offloading!`);
+      }
+      const m = await sendAndMeasure(chatId, args.prompt, args.think);
+      rows.push({
+        run,
+        'warmup_ms': w.ms,
+        'ttft_ms': m.ttftMs,
+        'total_ms': m.totalMs,
+        'prompt_tokens': m.perf ? fmt(m.perf.promptTokens) : '—',
+        'gen_tokens': m.perf ? fmt(m.perf.completionTokens) : '—',
+        'tok_s': m.perf ? fmt(m.perf.tokensPerSecond) : '—',
+      });
+      console.log(`Lauf ${run}: warmup ${w.ms} ms | TTFT ${fmt(m.ttftMs, ' ms')} | gesamt ${m.totalMs} ms`);
+    }
+  } finally {
+    if (createdChat) {
+      await fetch(`${BASE}/chats/${chatId}`, { method: 'DELETE' }).catch(() => {});
+    }
+  }
+
+  console.log('');
+  console.table(rows);
+
+  const ttfts = rows.map(r => r.ttft_ms).filter(v => typeof v === 'number');
+  if (ttfts.length > 1) {
+    const cold = ttfts[0];
+    const warm = Math.round(ttfts.slice(1).reduce((a, b) => a + b, 0) / (ttfts.length - 1));
+    console.log(`TTFT kalt (Lauf 1): ${cold} ms | TTFT warm (Ø Lauf 2+): ${warm} ms`);
+    if (warm > cold * 0.8) {
+      console.log('Warm kaum schneller als kalt? Dann greift der KV-Cache nicht — [perf]-Warnungen im Backend-Log prüfen.');
+    }
+  }
+}
+
+main().catch(err => {
+  console.error(`Benchmark fehlgeschlagen: ${err.message}`);
+  process.exit(1);
+});

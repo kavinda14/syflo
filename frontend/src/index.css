@@ -29,11 +29,954 @@ html, body, #root {
 body {
   /* Use the native system font on each platform for a familiar, polished feel */
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  background: #ffffff;
-  color: #111111;
+  /* Themed via the --color-* variables below so page background/text follow the theme */
+  background: var(--color-white);
+  color: var(--color-gray-900);
   /* Improve text rendering on macOS retina displays */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/*
+ * Chat-text highlights (design/mockup-chat-highlights-ask-in-chat.html).
+ * Painted via the CSS Custom Highlight API (chat/highlightAnchors.ts) so the
+ * markdown DOM stays untouched. Same five fixed product constants as the PDF
+ * highlights — never themed. Text is forced dark so marks stay readable on
+ * every bubble background and in dark themes.
+ */
+::highlight(syflo-chat-hl-yellow) { background-color: #FEF08A; color: #0F172A; }
+::highlight(syflo-chat-hl-green)  { background-color: #BBF7D0; color: #0F172A; }
+::highlight(syflo-chat-hl-blue)   { background-color: #BFDBFE; color: #0F172A; }
+::highlight(syflo-chat-hl-pink)   { background-color: #FBCFE8; color: #0F172A; }
+::highlight(syflo-chat-hl-orange) { background-color: #FED7AA; color: #0F172A; }
+
+/*
+ * KaTeX-Formeln in Chat-Antworten (Bug-Report 2026-07-22).
+ *
+ * WICHTIG — eigentliche Ursache der Überlappungen (3. Runde): package.json
+ * hatte katex@0.18, rehype-katex bündelt aber katex@0.16. KaTeX 0.18 hat die
+ * CSS-Klassen umbenannt (.sizing → .katex-sizing usw.) — die geladene 0.18-CSS
+ * matchte das 0.16-HTML nie, alle Scripts/Brüche blieben in VOLLER Größe und
+ * krachten in Bruchstriche und Nachbarzeilen. Fix: katex im package.json auf
+ * ^0.16 gepinnt (npm dedupliziert dann auf EINE Version). katex NICHT
+ * unabhängig von rehype-katex bumpen!
+ *
+ * 1) font-size: KaTeX' Default (1.21em) wirkt neben der 14px-Prosa riesig —
+ *    leicht runterskaliert fügt sich die Formel in die Zeile ein.
+ * 2) display: inline-block — als normales Inline-Element wächst die Zeilenbox
+ *    NICHT mit hohen Formeln (Brüche, Summen mit Grenzen), sie überlappen
+ *    dann die Nachbarzeilen. Inline-Blocks zählen voll in die Zeilenhöhe.
+ * 3) Display-Formeln (.katex-display) scrollen horizontal statt überzulaufen.
+ * Unlayered mit .prose-Präfix: gewinnt gegen katex.min.css (Spezifität) und
+ * gegen Tailwind-Utilities (Layer) — siehe Cascade-Hinweis oben.
+ */
+.prose .katex {
+  font-size: 1.05em;
+  display: inline-block;
+  max-width: 100%;
+  /* KaTeX malt Glyphen minimal AUSSERHALB der eigenen Box (Exponenten über
+     hohen Brüchen). 0.3em Kopf-/Fußraum puffert das. Gemessen 2026-07-22 mit
+     40 Formeln × inline/display × 5 Themes (Torture-Seite mathtest.html,
+     zusätzlich live in der App): 0 Kollisionen, 0 geclippte Display-Blöcke,
+     min. Abstand Formel-Tinte ↔ Nachbarzeile 2 px. */
+  padding: 0.3em 0;
+}
+.prose .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
+  margin: 0.5rem 0;
+}
+
+/*
+ * Pending-Selektion: hält die "blaue Markierung" der Textauswahl sichtbar,
+ * solange das Auswahl-Popup offen ist (die native Selektion kollabiert beim
+ * Klick ins Popup). Akzentfarbe des Themes, halbtransparent — sieht aus wie
+ * die Browser-Selektion, folgt aber dem Theme.
+ */
+::highlight(syflo-chat-hl-pending) {
+  background-color: color-mix(in srgb, var(--color-blue-500, #3b82f6) 30%, transparent);
+}
+
+/*
+ * Sprung-Flash aus dem Highlights-Drawer: die Markierung selbst leuchtet
+ * WEICH auf und klingt weich wieder ab (Nutzerkorrektur 2026-07-22, 3.
+ * Runde: Fade statt Blinken) — in IHRER Highlight-Farbe wie beim PDF.
+ * ::highlight()-Pseudoelemente sind nicht direkt animierbar; stattdessen
+ * animieren die Keyframes auf der Nachrichten-Zeile ([data-flash-range])
+ * die registrierte Custom Property --syflo-flash-alpha, und die
+ * ::highlight-Regeln mischen ihre Farben per color-mix damit (live in
+ * Chromium verifiziert 2026-07-22). initial-value 1 = ohne laufende
+ * Animation voller Flash — falls @property-Animation fehlt, degradiert es
+ * zum alten statischen Aufleuchten statt zu gar nichts.
+ * Gesättigte Gegenstücke zu den fünf Pastell-Produktfarben; wie die
+ * Basisfarben feste Produktkonstanten — nie getheamt.
+ */
+@property --syflo-flash-alpha {
+  syntax: '<number>';
+  inherits: true;
+  initial-value: 1;
+}
+@keyframes syflo-hl-range-flash {
+  0%   { --syflo-flash-alpha: 0; }
+  50%  { --syflo-flash-alpha: 1; }
+  100% { --syflo-flash-alpha: 0; }
+}
+/* Zwei weiche Pulse (Nutzerkorrektur 2026-07-22: „es sollte zweimal
+   flashen") — gleicher Takt wie der Bubble-Glow (2 × 0,75 s = FLASH_MS in
+   ChatArea/index.tsx, beide zusammen ändern). */
+[data-flash-range='true'] {
+  animation: syflo-hl-range-flash 0.75s ease-in-out 2;
+}
+::highlight(syflo-chat-hl-flash-yellow) {
+  background-color: color-mix(in srgb, #FACC15 calc(var(--syflo-flash-alpha) * 100%), transparent);
+  color: color-mix(in srgb, #0F172A calc(var(--syflo-flash-alpha) * 100%), currentColor);
+}
+::highlight(syflo-chat-hl-flash-green) {
+  background-color: color-mix(in srgb, #22C55E calc(var(--syflo-flash-alpha) * 100%), transparent);
+  color: color-mix(in srgb, #ffffff calc(var(--syflo-flash-alpha) * 100%), currentColor);
+}
+::highlight(syflo-chat-hl-flash-blue) {
+  background-color: color-mix(in srgb, #3B82F6 calc(var(--syflo-flash-alpha) * 100%), transparent);
+  color: color-mix(in srgb, #ffffff calc(var(--syflo-flash-alpha) * 100%), currentColor);
+}
+::highlight(syflo-chat-hl-flash-pink) {
+  background-color: color-mix(in srgb, #EC4899 calc(var(--syflo-flash-alpha) * 100%), transparent);
+  color: color-mix(in srgb, #ffffff calc(var(--syflo-flash-alpha) * 100%), currentColor);
+}
+::highlight(syflo-chat-hl-flash-orange) {
+  background-color: color-mix(in srgb, #F97316 calc(var(--syflo-flash-alpha) * 100%), transparent);
+  color: color-mix(in srgb, #ffffff calc(var(--syflo-flash-alpha) * 100%), currentColor);
+}
+
+/*
+ * Flash nach einem Sprung aus dem Highlights-Drawer: pulsierender Glow in
+ * der Farbe des Highlights (--flash-color, gesetzt vom jeweiligen Overlay).
+ * 2 × 0,75 s ≈ die beschlossenen 1,5 s (Nutzerkorrektur 2026-07-21: das
+ * doppelte Pulsieren bleibt — nur der Schein selbst wurde dezenter:
+ * dünner Ring für Kontur + weicher Schatten statt breitem Neon).
+ */
+@keyframes syflo-hl-flash {
+  0%, 100% { box-shadow: 0 0 0 0 transparent, 0 0 0 0 transparent; }
+  50% {
+    box-shadow:
+      0 0 0 1.5px color-mix(in srgb, var(--flash-color) 55%, transparent),
+      0 0 14px 3px color-mix(in srgb, var(--flash-color) 30%, transparent);
+  }
+}
+.syflo-hl-flash {
+  animation: syflo-hl-flash 0.75s ease-in-out 2;
+}
+
+/*
+ * Mehrzeilige PDF-Highlights: EIN Glow pro Highlight statt pro Zeile.
+ * Die Zeilen-Rechtecke liegen in einem Container; drop-shadow läuft um die
+ * gemeinsame Silhouette — keine helleren Nähte, wo sich die Schatten
+ * benachbarter Zeilen sonst addieren würden. Animiert wird nur die
+ * Deckkraft des Containers; der Filter selbst bleibt konstant.
+ */
+@keyframes syflo-hl-flash-group {
+  0%, 100% { opacity: 0; }
+  50% { opacity: 1; }
+}
+.syflo-hl-flash-group {
+  opacity: 0;
+  animation: syflo-hl-flash-group 0.75s ease-in-out 2;
+  filter:
+    drop-shadow(0 0 1px var(--flash-color))
+    drop-shadow(0 0 8px color-mix(in srgb, var(--flash-color) 45%, transparent));
+}
+.syflo-hl-flash-group > div {
+  background: color-mix(in srgb, var(--flash-color) 16%, transparent);
+}
+
+/*
+ * ============================================================
+ * Color themes (design/mockup-fun-themes-v3.html)
+ *
+ * Tailwind v4 compiles every color utility to var(--color-*), so a theme is
+ * just a scoped re-definition of those variables — no component changes.
+ * Semantics kept stable across themes:
+ *   white / gray scale  → surfaces + neutral text
+ *   blue scale          → the accent (buttons, active states, links)
+ *   red / green / amber → status colors (only re-tuned for dark Matrix)
+ * "professional" is the default Tailwind palette → no block needed.
+ * The five PDF highlight colors are fixed product constants — never themed.
+ * ============================================================
+ */
+
+/* ---------- Mushroom Kingdom · storybook overworld (mockup v4) ----------
+   Airy sky gradient, cream card stock, deep navy outlines, sun-warmed red
+   accent, question-block gold. design:mushroom.palette-storybook */
+:root[data-theme='mushroom-kingdom'] {
+  --color-white: #fffdf4;
+  --color-gray-50: #f7f4e4;
+  --color-gray-100: #f0eddd;
+  --color-gray-200: #e4decc;
+  --color-gray-300: #cfc7ac;
+  --color-gray-400: #82829f;
+  --color-gray-500: #6e6e8c;
+  --color-gray-600: #565678;
+  --color-gray-700: #3d3d63;
+  --color-gray-800: #2f2f55;
+  --color-gray-900: #23234a;
+  --color-gray-950: #191938;
+  /* tree connector lines share the navy outline ink */
+  --color-slate-300: #26264f;
+  --color-blue-50: #fbe6db;
+  --color-blue-100: #f8d2c2;
+  --color-blue-200: #f2a99a;
+  --color-blue-300: #ea7a6c;
+  --color-blue-400: #e15a50;
+  --color-blue-500: #dd4d44;
+  --color-blue-600: #d8433b;
+  --color-blue-700: #bc332c;
+  --color-blue-800: #99251f;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 13px;
+  --radius-2xl: 16px;
+  --radius-3xl: 20px;
+  /* cartoon offset shadow ink (design/mockup-shadow-elements.html) */
+  --syflo-shadow-ink: #26264f;
+}
+/* design:mushroom.pixel-display-font — Baloo 2 UI, Press Start 2P display */
+:root[data-theme='mushroom-kingdom'] body {
+  font-family: 'Baloo 2', -apple-system, sans-serif;
+}
+:root[data-theme='mushroom-kingdom'] .font-serif {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 22px;
+  line-height: 1.6;
+  letter-spacing: 0;
+}
+:root[data-theme='mushroom-kingdom'] .uppercase {
+  font-family: 'Press Start 2P', monospace;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+/* Empty-State-Titel einzeilig: Press Start 2P ist ~1em pro Glyphe breit,
+   bei den 22px von .font-serif bricht "How can I help you today?" im
+   max-w-lg-Container um. 16px × 26 Zeichen ≈ 416px passt in eine Zeile. */
+:root[data-theme='mushroom-kingdom'] .syflo-empty-title {
+  font-size: 16px;
+  white-space: nowrap;
+}
+/* design:mushroom.chunky-outlines — navy ink borders + 3D game-button shadows */
+:root[data-theme='mushroom-kingdom'] .border-gray-100,
+:root[data-theme='mushroom-kingdom'] .border-gray-200,
+:root[data-theme='mushroom-kingdom'] .border-gray-300,
+:root[data-theme='mushroom-kingdom'] .divide-gray-100 > * {
+  border-color: #26264f;
+}
+/* design:mushroom.bubbles — user bubble in accent red, AI bubble on card stock
+   (mockup --bubble-user-bg/--bubble-ai-bg; radius needs !important to beat the
+   component's inline 2rem) */
+:root[data-theme='mushroom-kingdom'] .bg-gray-100.select-text {
+  background-color: #d8433b;
+  color: #fff9ee;
+  border: 2px solid #26264f;
+  border-radius: 12px 12px 4px 12px !important;
+  box-shadow: inset 0 -3px 0 rgba(38, 38, 79, 0.18), 4px 4px 0 var(--syflo-shadow-ink);
+}
+:root[data-theme='mushroom-kingdom'] .prose {
+  background-color: #f4f1e2;
+  border: 2px solid #26264f;
+  border-radius: 12px 12px 12px 4px;
+  padding: 10px 14px;
+  box-shadow: inset 0 -3px 0 rgba(38, 38, 79, 0.08), 4px 4px 0 var(--syflo-shadow-ink);
+}
+:root[data-theme='mushroom-kingdom'] .bg-blue-600:not(.rounded-full) {
+  border: 2px solid #26264f;
+  box-shadow: inset 0 -3px 0 rgba(38, 38, 79, 0.22), 4px 4px 0 var(--syflo-shadow-ink);
+}
+/* design:mushroom.gold-send — the send button is a question-block (squared
+   like the mockup, not a circle) */
+:root[data-theme='mushroom-kingdom'] .bg-blue-600.rounded-full {
+  background: linear-gradient(180deg, #f7c550, #e9a92e);
+  color: #4a3608;
+  border: 2px solid #26264f;
+  border-radius: 10px;
+  box-shadow: inset 0 -3px 0 rgba(38, 38, 79, 0.25), 4px 4px 0 var(--syflo-shadow-ink);
+}
+/* design:mushroom.sky-hills-backdrop — sun, clouds, two hill ranges (pure CSS) */
+:root[data-theme='mushroom-kingdom'] .syflo-pdf-pane {
+  background-image:
+    radial-gradient(circle 190px at 87% -5%, rgba(255, 248, 216, 0.65), rgba(255, 248, 216, 0.2) 55%, transparent 74%),
+    radial-gradient(ellipse 44px 16px at 10% 40%, rgba(255, 255, 255, 0.45) 58%, transparent 78%),
+    radial-gradient(ellipse 32px 13px at 14% 38.8%, rgba(255, 255, 255, 0.4) 58%, transparent 78%),
+    radial-gradient(ellipse 48px 17px at 91% 14%, rgba(255, 255, 255, 0.5) 58%, transparent 78%),
+    radial-gradient(ellipse 34px 14px at 87% 12.8%, rgba(255, 255, 255, 0.42) 58%, transparent 78%),
+    radial-gradient(ellipse 52px 30px at 9% 16%, rgba(255, 255, 255, 0.95) 56%, transparent 76%),
+    radial-gradient(ellipse 38px 22px at 5% 17.4%, rgba(255, 255, 255, 0.88) 56%, transparent 76%),
+    radial-gradient(ellipse 40px 23px at 13.5% 17.4%, rgba(255, 255, 255, 0.88) 56%, transparent 76%),
+    radial-gradient(ellipse 58px 33px at 92% 55%, rgba(255, 255, 255, 0.92) 56%, transparent 76%),
+    radial-gradient(ellipse 42px 25px at 87.5% 56.5%, rgba(255, 255, 255, 0.85) 56%, transparent 76%),
+    radial-gradient(ellipse 44px 26px at 96.5% 56.5%, rgba(255, 255, 255, 0.85) 56%, transparent 76%),
+    radial-gradient(ellipse 46% 150px at 0% 104%, #7fc06c 60%, transparent 61%),
+    radial-gradient(ellipse 52% 175px at 44% 107%, #86c673 60%, transparent 61%),
+    radial-gradient(ellipse 48% 150px at 100% 104%, #7fc06c 60%, transparent 61%),
+    radial-gradient(ellipse 56% 115px at 10% 108%, #4f9c41 60%, transparent 61%),
+    radial-gradient(ellipse 48% 100px at 55% 110%, #539f44 60%, transparent 61%),
+    radial-gradient(ellipse 58% 130px at 96% 109%, #4a973d 60%, transparent 61%),
+    linear-gradient(180deg, #79adfb 0%, #5d93ef 52%, #7bb4f3 84%, #95caf0 100%);
+}
+/* design:mushroom.pdf-page-shadow — pages float over the sky with a navy
+   ring (a shadow, not a border, so the text layer stays pixel-aligned) */
+:root[data-theme='mushroom-kingdom'] .syflo-pdf-pane .shadow-md {
+  box-shadow: 0 0 0 2px #26264f, 6px 6px 0 var(--syflo-shadow-ink);
+  border-radius: 6px;
+}
+
+/* ---------- Hyrule · a field at golden hour (mockup v4) ----------
+   Sage parchment, quiet Sheikah teal, gold saved for the one thing that
+   matters. design:hyrule.palette-golden-hour */
+:root[data-theme='hyrule'] {
+  --color-white: #f8f5e8;
+  --color-gray-50: #f1eddc;
+  --color-gray-100: #e8e3ce;
+  --color-gray-200: #d9d3b9;
+  --color-gray-300: #c6bfa0;
+  --color-gray-400: #8e9078;
+  --color-gray-500: #767962;
+  --color-gray-600: #5f624e;
+  --color-gray-700: #4e5240;
+  --color-gray-800: #414534;
+  --color-gray-900: #33372a;
+  --color-gray-950: #24271d;
+  --color-slate-300: #d9d3b9;
+  --color-blue-50: #deede8;
+  --color-blue-100: #cbe4dd;
+  --color-blue-200: #a3d1c7;
+  --color-blue-300: #74bcaf;
+  --color-blue-400: #43aba0;
+  --color-blue-500: #2fa79d;
+  --color-blue-600: #2aa198;
+  --color-blue-700: #218880;
+  --color-blue-800: #1a6b65;
+  --radius-sm: 7px;
+  --radius-md: 9px;
+  --radius-lg: 11px;
+  --radius-xl: 14px;
+  --radius-2xl: 17px;
+  --radius-3xl: 21px;
+  /* cartoon offset shadow ink — gold-olive (design/mockup-shadow-elements.html) */
+  --syflo-shadow-ink: #d5c88f;
+}
+/* design:hyrule.marcellus-display — Karla UI, Marcellus display */
+:root[data-theme='hyrule'] body {
+  font-family: 'Karla', -apple-system, sans-serif;
+}
+:root[data-theme='hyrule'] .font-serif {
+  font-family: 'Marcellus', serif;
+}
+:root[data-theme='hyrule'] .uppercase {
+  letter-spacing: 0.22em;
+}
+/* design:hyrule.bubbles — teal gradient user bubble, parchment AI bubble */
+:root[data-theme='hyrule'] .bg-gray-100.select-text {
+  background: linear-gradient(165deg, #2faea4, #218a82);
+  color: #fcfbf2;
+  border-radius: 13px 13px 4px 13px !important;
+  box-shadow: inset 0 1px 0 rgba(252, 251, 242, 0.2), 4px 4px 0 var(--syflo-shadow-ink);
+}
+:root[data-theme='hyrule'] .prose {
+  background-color: #efebd8;
+  border: 1px solid color-mix(in srgb, #d9d3b9 80%, transparent);
+  border-radius: 13px 13px 13px 4px;
+  padding: 10px 14px;
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+/* design:hyrule.gold-active-edge — active/selected surfaces carry the gold edge */
+:root[data-theme='hyrule'] .bg-blue-50 {
+  box-shadow: inset 3px 0 0 #b8963a;
+}
+/* golden-hour light pools on the working panes */
+:root[data-theme='hyrule'] .syflo-chat-pane,
+:root[data-theme='hyrule'] .syflo-sidebar {
+  background-image:
+    radial-gradient(ellipse 55% 35% at 78% 0%, rgba(214, 182, 89, 0.10), transparent 70%),
+    radial-gradient(ellipse 40% 30% at 8% 100%, rgba(42, 161, 152, 0.05), transparent 70%);
+}
+/* status dot glows softly gold like the mockup's model pill */
+:root[data-theme='hyrule'] .bg-green-500 {
+  box-shadow: 0 0 8px rgba(184, 150, 58, 0.55);
+}
+/* design:hyrule.field-panorama — layered ridges, snow peak, grass, motes */
+:root[data-theme='hyrule'] .syflo-pdf-pane {
+  background-color: #e5dfc6;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 900' preserveAspectRatio='none'%3E%3Cpath d='M0 840 L90 760 L180 822 L290 742 L400 830 L520 770 L640 836 L760 756 L870 826 L980 748 L1080 818 L1200 780 L1200 900 L0 900 Z' fill='%23A9BC9C' opacity='.5'/%3E%3Cpath d='M960 768 L980 748 L1000 768 L990 776 L978 766 L968 776 Z' fill='%23F4F1E2' opacity='.8'/%3E%3Cpath d='M0 872 L140 820 L280 866 L430 812 L580 870 L740 824 L890 872 L1030 830 L1200 866 L1200 900 L0 900 Z' fill='%23879E77' opacity='.55'/%3E%3Crect x='0' y='884' width='1200' height='16' fill='%236F8F5C' opacity='.5'/%3E%3Cg stroke='%236F8F5C' stroke-width='2.5' stroke-linecap='round' fill='none' opacity='.5'%3E%3Cpath d='M60 884 q3 -14 8 -18'/%3E%3Cpath d='M74 884 q-2 -12 -8 -16'/%3E%3Cpath d='M120 886 q3 -12 7 -15'/%3E%3Cpath d='M1084 884 q3 -14 8 -18'/%3E%3Cpath d='M1098 884 q-2 -12 -8 -16'/%3E%3Cpath d='M1140 886 q3 -12 7 -15'/%3E%3C/g%3E%3Cg fill='%23B8963A'%3E%3Ccircle cx='90' cy='520' r='2.4' opacity='.5'/%3E%3Ccircle cx='130' cy='430' r='1.8' opacity='.4'/%3E%3Ccircle cx='70' cy='330' r='1.6' opacity='.35'/%3E%3Ccircle cx='1120' cy='480' r='2.2' opacity='.5'/%3E%3Ccircle cx='1080' cy='380' r='1.7' opacity='.4'/%3E%3Ccircle cx='1150' cy='290' r='1.5' opacity='.35'/%3E%3C/g%3E%3Cg fill='%232AA198'%3E%3Ccircle cx='110' cy='620' r='2' opacity='.45'/%3E%3Ccircle cx='1100' cy='600' r='2' opacity='.45'/%3E%3Ccircle cx='75' cy='700' r='1.6' opacity='.35'/%3E%3Ccircle cx='1135' cy='710' r='1.6' opacity='.35'/%3E%3C/g%3E%3C/svg%3E");
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+/* design:hyrule.pdf-page-shadow — gold-tinted ring, cartoon offset drop */
+:root[data-theme='hyrule'] .syflo-pdf-pane .shadow-md {
+  box-shadow: 0 0 0 1px rgba(158, 148, 106, 0.25), 6px 6px 0 var(--syflo-shadow-ink);
+  border-radius: 6px;
+}
+/* design:hyrule.film-grain — 0.08 like the mockup */
+:root[data-theme='hyrule'] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.08;
+  mix-blend-mode: overlay;
+}
+
+/* ---------- Ink Blue · cool navy neutrals, brand blue accent (mockup v2/v4) ----
+   design:inkblue.palette-navy-neutrals */
+:root[data-theme='ink-blue'] {
+  --color-white: #ffffff;
+  --color-gray-50: #f3f8fd;
+  --color-gray-100: #eef4fb;
+  --color-gray-200: #dbe6f3;
+  --color-gray-300: #becfe4;
+  --color-gray-400: #6e82a3;
+  --color-gray-500: #5c7194;
+  --color-gray-600: #46597b;
+  --color-gray-700: #2c4059;
+  --color-gray-800: #1f3049;
+  --color-gray-900: #14263f;
+  --color-gray-950: #0d1a2e;
+  /* tree connector lines are drawn with bg-slate-300 — ink navy like the mockup */
+  --color-slate-300: #1c2b4a;
+  /* cartoon offset shadow ink (design/mockup-shadow-elements.html) */
+  --syflo-shadow-ink: rgba(28, 43, 74, 0.9);
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 15px;
+  --radius-2xl: 18px;
+  --radius-3xl: 22px;
+}
+/* design:inkblue.grotesk-display — DM Sans UI, Space Grotesk display (bundled) */
+:root[data-theme='ink-blue'] body {
+  font-family: 'DM Sans', -apple-system, sans-serif;
+}
+:root[data-theme='ink-blue'] .font-serif {
+  font-family: 'Space Grotesk', 'DM Sans', sans-serif;
+}
+/* design:inkblue.ink-outlines — every structural border goes dark navy.
+   These target the literal Tailwind classes; backgrounds like bg-gray-100
+   stay light, only border colors flip. Unlayered rules beat @layer utilities. */
+:root[data-theme='ink-blue'] .border-gray-100,
+:root[data-theme='ink-blue'] .border-gray-200,
+:root[data-theme='ink-blue'] .border-gray-300,
+:root[data-theme='ink-blue'] .divide-gray-100 > * {
+  border-color: #1c2b4a;
+}
+/* design:inkblue.sticker-shadows — offset solid shadows on primary elements;
+   fills use the mockup accent #3B82F6 (hover darkens to #2563EB). The w-2
+   exception keeps the tiny provider status dot shadow-free. */
+:root[data-theme='ink-blue'] .bg-blue-600,
+:root[data-theme='ink-blue'] .bg-blue-500 {
+  background-color: #3b82f6;
+}
+:root[data-theme='ink-blue'] .bg-blue-600:not(.w-2),
+:root[data-theme='ink-blue'] .bg-blue-500:not(.w-2) {
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+:root[data-theme='ink-blue'] .bg-blue-600:hover,
+:root[data-theme='ink-blue'] .bg-blue-500:hover {
+  background-color: #2563eb;
+}
+/* design:inkblue.bubbles — brand-blue user bubble with sticker shadow,
+   outlined AI bubble (mockup --bubble-user-bg/--bubble-ai-bg) */
+:root[data-theme='ink-blue'] .bg-gray-100.select-text {
+  background-color: #3b82f6;
+  color: #ffffff;
+  border: 1.5px solid #1c2b4a;
+  border-radius: 14px 14px 4px 14px !important;
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+:root[data-theme='ink-blue'] .prose {
+  background-color: #eef4fb;
+  border: 1.5px solid #1c2b4a;
+  border-radius: 14px 14px 14px 4px;
+  padding: 10px 14px;
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+/* active/accent text uses the brand blue itself, not the darker default 600/700 */
+:root[data-theme='ink-blue'] .text-blue-600,
+:root[data-theme='ink-blue'] .text-blue-700 {
+  color: #3b82f6;
+}
+:root[data-theme='ink-blue'] .bg-blue-50 {
+  box-shadow: inset 0 0 0 1.5px #1c2b4a;
+}
+/* design:inkblue.pdf-page-shadow — ink outline + offset sticker shadow;
+   the desk itself uses the mockup's --pdf-bg */
+:root[data-theme='ink-blue'] .syflo-pdf-pane {
+  background-color: #e7eef6;
+}
+:root[data-theme='ink-blue'] .syflo-pdf-pane .shadow-md {
+  box-shadow: 0 0 0 1.5px #1c2b4a, 6px 6px 0 rgba(28, 43, 74, 0.35);
+  border-radius: 6px;
+}
+
+/* ---------- Matrix · phosphor terminal (mockup v4) ----------
+   Not neon — phosphor: near-black surfaces, desaturated green ramp.
+   The gray scale is inverted (50 = darkest surface, 900 = brightest text).
+   design:matrix.palette-phosphor */
+:root[data-theme='matrix'] {
+  --color-white: #060c07;
+  --color-gray-50: #08130a;
+  --color-gray-100: #0c160d;
+  --color-gray-200: #12301a;
+  --color-gray-300: #1a4224;
+  --color-gray-400: #3e6a48;
+  --color-gray-500: #4c7e58;
+  --color-gray-600: #64a272;
+  --color-gray-700: #7bc188;
+  --color-gray-800: #9ad6a4;
+  --color-gray-900: #b7e8bc;
+  --color-gray-950: #d9f6dd;
+  --color-slate-300: #12301a;
+  --color-blue-50: #07290f;
+  --color-blue-100: #0a3414;
+  --color-blue-200: #0f4a1e;
+  --color-blue-300: #16612b;
+  --color-blue-400: #1e9b43;
+  --color-blue-500: #24c95c;
+  --color-blue-600: #2be76b;
+  --color-blue-700: #5ef391;
+  --color-blue-800: #8ff7b4;
+  /* status colors re-tuned for dark surfaces */
+  --color-red-50: #2b1414;
+  --color-red-100: #3b1b1b;
+  --color-red-200: #542525;
+  --color-red-300: #6e3030;
+  --color-red-500: #f87171;
+  --color-red-600: #f65a5a;
+  --color-red-700: #ff7b7b;
+  --color-green-50: #12281a;
+  --color-green-600: #34d97b;
+  --color-green-700: #52e294;
+  --color-amber-50: #2b2412;
+  --color-amber-200: #4a3d1c;
+  --color-amber-700: #e8c24a;
+  --color-amber-800: #f2d46e;
+  --color-emerald-50: #0f2a1e;
+  --color-emerald-200: #1e4a36;
+  --color-emerald-700: #5be0a6;
+  --radius-sm: 2px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 5px;
+  --radius-2xl: 6px;
+  --radius-3xl: 8px;
+  /* cartoon offset shadow ink — phosphor afterglow (design/mockup-shadow-elements.html) */
+  --syflo-shadow-ink: #10331b;
+}
+/* design:matrix.mono-font — IBM Plex Mono UI, Share Tech Mono display (bundled) */
+:root[data-theme='matrix'] body {
+  font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+}
+:root[data-theme='matrix'] .font-serif {
+  font-family: 'Share Tech Mono', 'IBM Plex Mono', monospace;
+}
+/* design:matrix.code-rain — two rain layers of literal 1s and 0s (inline
+   SVG tiles, max fill-opacity 0.10) falling at different parallax speeds
+   over the faint column grid, behind the sidebar, chat pane and PDF desk.
+   Tile heights (360px/480px) divide the travel distances exactly → seamless
+   loop. (The mockup's opaque pdf-pane would hide the rain in the middle
+   column; the user prefers it animated — reverted 2026-07-20. Real digits
+   instead of gradient dashes: user request 2026-07-20.) */
+:root[data-theme='matrix'] .syflo-sidebar,
+:root[data-theme='matrix'] .syflo-chat-pane,
+:root[data-theme='matrix'] .syflo-pdf-pane {
+  background-image:
+    url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='220' height='360' font-family='IBM Plex Mono,monospace' fill='%232BE76B'><text x='18' y='40' font-size='13' fill-opacity='0.10'>1</text><text x='92' y='86' font-size='14' fill-opacity='0.07'>0</text><text x='170' y='52' font-size='12' fill-opacity='0.09'>1</text><text x='48' y='150' font-size='13' fill-opacity='0.06'>0</text><text x='140' y='180' font-size='15' fill-opacity='0.10'>1</text><text x='200' y='230' font-size='12' fill-opacity='0.07'>0</text><text x='25' y='262' font-size='14' fill-opacity='0.08'>1</text><text x='110' y='300' font-size='12' fill-opacity='0.06'>0</text><text x='180' y='330' font-size='13' fill-opacity='0.09'>1</text></svg>"),
+    url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='300' height='480' font-family='IBM Plex Mono,monospace' fill='%232BE76B'><text x='34' y='30' font-size='10' fill-opacity='0.05'>0</text><text x='128' y='66' font-size='9' fill-opacity='0.04'>1</text><text x='236' y='44' font-size='10' fill-opacity='0.06'>0</text><text x='70' y='128' font-size='9' fill-opacity='0.04'>1</text><text x='188' y='158' font-size='10' fill-opacity='0.05'>0</text><text x='272' y='196' font-size='9' fill-opacity='0.04'>1</text><text x='20' y='236' font-size='10' fill-opacity='0.06'>1</text><text x='142' y='270' font-size='9' fill-opacity='0.04'>0</text><text x='250' y='312' font-size='10' fill-opacity='0.05'>1</text><text x='88' y='356' font-size='9' fill-opacity='0.04'>0</text><text x='204' y='398' font-size='10' fill-opacity='0.05'>1</text><text x='40' y='442' font-size='9' fill-opacity='0.04'>0</text></svg>"),
+    repeating-linear-gradient(90deg, transparent 0 18px, rgba(43, 231, 107, 0.018) 18px 20px);
+  background-size: 220px 360px, 300px 480px, auto;
+  animation: syflo-code-rain 36s linear infinite;
+}
+@keyframes syflo-code-rain {
+  from { background-position: 0 0, 0 0, 0 0; }
+  to   { background-position: 0 1080px, 0 480px, 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-theme='matrix'] .syflo-sidebar,
+  :root[data-theme='matrix'] .syflo-chat-pane,
+  :root[data-theme='matrix'] .syflo-pdf-pane {
+    animation: none;
+  }
+}
+/* design:matrix.vignette-grain — deep vignette + 0.05 film grain overlays */
+:root[data-theme='matrix'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9998;
+  background: radial-gradient(ellipse 90% 80% at 50% 38%, transparent 55%, rgba(0, 0, 0, 0.5) 100%);
+}
+:root[data-theme='matrix'] body::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.05;
+  mix-blend-mode: overlay;
+}
+/* design:matrix.phosphor-glow — glow on accent fills and status dots;
+   larger fills additionally cast the cartoon afterglow offset */
+:root[data-theme='matrix'] .bg-blue-600,
+:root[data-theme='matrix'] .bg-blue-500 {
+  box-shadow: 0 0 12px rgba(43, 231, 107, 0.35);
+}
+:root[data-theme='matrix'] .bg-blue-600:not(.w-2),
+:root[data-theme='matrix'] .bg-blue-500:not(.w-2) {
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink), 0 0 12px rgba(43, 231, 107, 0.35);
+}
+:root[data-theme='matrix'] .bg-green-500 {
+  box-shadow: 0 0 8px #2be76b;
+}
+:root[data-theme='matrix'] .bg-blue-50 {
+  box-shadow: inset 0 0 0 1px #0f4a1e;
+}
+/* design:matrix.pdf-page-shadow — phosphor ring, cartoon afterglow drop, darkest desk */
+:root[data-theme='matrix'] .syflo-pdf-pane {
+  background-color: #010401;
+}
+:root[data-theme='matrix'] .syflo-pdf-pane .shadow-md {
+  box-shadow: 0 0 0 1px rgba(43, 231, 107, 0.12), 6px 6px 0 var(--syflo-shadow-ink);
+  border-radius: 6px;
+}
+/* design:matrix.bubbles — dark phosphor user bubble, AI bubble with green edge */
+:root[data-theme='matrix'] .bg-gray-100.select-text {
+  background-color: #07290f;
+  color: #b7e8bc;
+  border: 1px solid #12301a;
+  border-radius: 3px 3px 2px 3px !important;
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+:root[data-theme='matrix'] .prose {
+  background-color: #08130a;
+  border-left: 2px solid color-mix(in srgb, #2be76b 30%, transparent);
+  border-radius: 3px;
+  padding: 10px 14px;
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+/* design:matrix.terminal-details — phosphor caret and selection */
+:root[data-theme='matrix'] textarea,
+:root[data-theme='matrix'] input {
+  caret-color: #2be76b;
+}
+:root[data-theme='matrix'] ::selection {
+  background: #2be76b;
+  color: #021206;
+}
+
+/*
+ * ============================================================
+ * Cartoon offset shadows (design/mockup-shadow-elements.html)
+ *
+ * The hard Ink-Blue offset shadow (no blur) is a shared style device across
+ * ALL themes: 4px offset for elements, 6px for cards/overlays/modals. Each
+ * theme only re-colors the ink via --syflo-shadow-ink (set in its :root
+ * block above); the default below is Professional's calm light gray.
+ * Themes with richer element treatments (bubbles, game buttons, PDF pages)
+ * override these generic rules with higher-specificity rules above.
+ * ============================================================
+ */
+:root {
+  --syflo-shadow-ink: #e2e8f0;
+}
+/* Tailwind elevation utilities → hard offsets (unlayered beats @layer utilities) */
+.shadow-sm,
+.shadow-md {
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+.shadow-lg,
+.shadow-xl,
+.shadow-2xl {
+  box-shadow: 6px 6px 0 var(--syflo-shadow-ink);
+}
+/* Accent buttons everywhere (the w-2 exception is the provider status dot) */
+.bg-blue-600:not(.w-2),
+.bg-blue-500:not(.w-2) {
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+/* User chat bubble in the default theme (themed bubble rules override) */
+.bg-gray-100.select-text {
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+/* Mind-map nodes — sized inline in MindMap/index.tsx, all colors/borders/
+   shadows here so the card follows the theme; root node reads as the bigger,
+   accent-filled card */
+.syflo-map-node {
+  background: var(--syflo-map-node-bg);
+  color: var(--syflo-map-node-text);
+  border: var(--syflo-map-bw) solid var(--syflo-map-node-line);
+  border-radius: var(--radius-2xl, 16px);
+  box-shadow: 4px 4px 0 var(--syflo-shadow-ink);
+}
+.syflo-map-node:hover,
+.syflo-map-node-root {
+  box-shadow: 6px 6px 0 var(--syflo-shadow-ink);
+}
+.syflo-map-node-root {
+  background: var(--syflo-map-root-bg);
+  color: var(--syflo-map-root-text);
+}
+.syflo-map-node-root:hover {
+  box-shadow: 8px 8px 0 var(--syflo-shadow-ink);
+}
+
+/*
+ * ============================================================
+ * Mind-map theming (design/mockup-mindmap-themes.html)
+ *
+ * Canvas, dot grid, edges and edge labels follow the active theme via the
+ * --syflo-map-* variables. Defaults below are Professional; each theme
+ * re-colors them in its :root block or theme section.
+ * ============================================================
+ */
+:root {
+  /* ThinkingIndicator-Punkte (ChatArea): Akzent → Zweitfarbe des Themes */
+  --syflo-think-a: #2563eb;
+  --syflo-think-b: #34d399;
+  /* Bewegungscharakter des Themes (mockup-fun-themes-v4.html --ease-fun) */
+  --syflo-ease-fun: ease;
+  --syflo-map-canvas: #f9fafb;
+  --syflo-map-dots: #e2e8f0;
+  --syflo-map-node-bg: #ffffff;
+  --syflo-map-node-line: #e5e7eb;
+  --syflo-map-node-text: #111827;
+  --syflo-map-root-bg: #2563eb;
+  --syflo-map-root-text: #ffffff;
+  --syflo-map-edge: #b6c2d4;
+  --syflo-map-bw: 1.5px;
+  --syflo-map-active: #2563eb;
+}
+/* Aktiv-Ring am Knoten des geöffneten Chats — „marching ants" aus syflo-2,
+   Farbe über --syflo-map-active, Bewegungscharakter über --syflo-ease-fun.
+   right/bottom ragen um den Cartoon-Offset-Schatten hinaus (4px Karte,
+   6px Wurzel), damit der Ring Karte UND Schatten umschließt statt den
+   Schatten unten rechts zu schneiden. */
+.syflo-map-active-ring {
+  position: absolute;
+  inset: 0;
+  right: -4px;
+  bottom: -4px;
+  border-radius: inherit;
+  outline: 2px dashed var(--syflo-map-active);
+  outline-offset: 6px;
+  animation: syflo-marching-ants 1.4s var(--syflo-ease-fun) infinite;
+  pointer-events: none;
+}
+.syflo-map-node-root .syflo-map-active-ring {
+  right: -6px;
+  bottom: -6px;
+}
+@keyframes syflo-marching-ants {
+  0%, 100% { outline-offset: 6px; opacity: 0.95; }
+  50% { outline-offset: 10px; opacity: 0.65; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .syflo-map-active-ring {
+    animation: none;
+  }
+}
+.syflo-mindmap-pane .react-flow {
+  background-color: var(--syflo-map-canvas);
+}
+.syflo-mindmap-pane .react-flow__edge-path {
+  stroke: var(--syflo-map-edge);
+  stroke-width: 2;
+}
+/* React-Flow-Zoom-Controls (+ / − / Fit / Lock) folgen dem Karten-Look des
+   Themes statt dem weißen xyflow-Default (Nutzer-Report 2026-07-22: im
+   Matrix-Theme blieben sie weiß). xyflow stellt dafür eigene
+   Override-Variablen bereit — kein !important nötig. */
+.syflo-mindmap-pane .react-flow__controls {
+  --xy-controls-button-background-color: var(--syflo-map-node-bg);
+  --xy-controls-button-background-color-hover: var(--syflo-map-canvas);
+  --xy-controls-button-color: var(--syflo-map-node-text);
+  --xy-controls-button-border-color: var(--syflo-map-node-line);
+  --xy-controls-box-shadow: 0 0 0 1px var(--syflo-map-node-line);
+  border-radius: var(--radius-sm, 2px);
+  overflow: hidden;
+}
+.syflo-map-edge-label {
+  background: var(--syflo-map-node-bg);
+  color: var(--syflo-map-node-text);
+  border: 1px solid var(--syflo-map-node-line);
+}
+
+/*
+ * Typing indicator (design/mockup-fun-themes-v4.html .typing/.tdot):
+ * three bouncing dots, no bubble around them (user decision 2026-07-20).
+ * Colors come from the theme's --syflo-think-a/-b pair, the bounce easing
+ * from --syflo-ease-fun.
+ */
+.syflo-typing {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 10px 2px 4px;
+  width: fit-content;
+}
+.syflo-typing-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--syflo-think-a);
+  color: var(--syflo-think-a);
+  animation: syflo-typing-bounce 1.2s var(--syflo-ease-fun) infinite;
+}
+.syflo-typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+  background: var(--syflo-think-b);
+  color: var(--syflo-think-b);
+}
+.syflo-typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+/* Sanftes Einblenden der rotierenden Tipp-/Zitat-Zeile in der Denk-Phase
+   (mockup-model-picker.html, Sektion 04). */
+@keyframes syflo-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes syflo-typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-6px); }
+}
+
+/* Kompakte Variante für Sidebar-Zeilen: zeigt an, dass in diesem Chat gerade
+   eine Antwort im Hintergrund generiert wird. Gleiche Farben/Easing wie die
+   großen Punkte, nur kleiner und mit flacherem Hüpfer. */
+.syflo-typing-sm {
+  padding: 0 2px;
+  gap: 3px;
+}
+.syflo-typing-sm .syflo-typing-dot {
+  width: 4px;
+  height: 4px;
+  animation-name: syflo-typing-bounce-sm;
+}
+@keyframes syflo-typing-bounce-sm {
+  0%, 60%, 100% { transform: translateY(0); }
+  30% { transform: translateY(-3px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .syflo-typing-dot {
+    animation: none;
+  }
+}
+
+/* Ink Blue — Sticker-Karten, Marine-Tinte */
+:root[data-theme='ink-blue'] {
+  --syflo-think-a: #3b82f6;
+  --syflo-think-b: #34d399;
+  --syflo-ease-fun: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --syflo-map-canvas: #f3f8fd;
+  --syflo-map-dots: #c9d8eb;
+  --syflo-map-node-bg: #ffffff;
+  --syflo-map-node-line: #1c2b4a;
+  --syflo-map-node-text: #14263f;
+  --syflo-map-root-bg: #3b82f6;
+  --syflo-map-root-text: #ffffff;
+  --syflo-map-edge: #1c2b4a;
+  --syflo-map-active: #3b82f6;
+}
+:root[data-theme='ink-blue'] .syflo-mindmap-pane .react-flow__edge-path {
+  stroke-width: 2.5;
+}
+
+/* Mushroom Kingdom — Karton-Knoten überm Himmel, dicke Navy-Pfade */
+:root[data-theme='mushroom-kingdom'] {
+  --syflo-think-a: #d8433b;
+  --syflo-think-b: #efb43a;
+  --syflo-ease-fun: cubic-bezier(0.34, 1.45, 0.6, 1);
+  --syflo-map-canvas: #79adfb;
+  --syflo-map-dots: rgba(255, 255, 255, 0.35);
+  --syflo-map-node-bg: #fffdf4;
+  --syflo-map-node-line: #26264f;
+  --syflo-map-node-text: #23234a;
+  --syflo-map-root-bg: #d8433b;
+  --syflo-map-root-text: #fff9ee;
+  --syflo-map-edge: #26264f;
+  --syflo-map-bw: 2.5px;
+  --syflo-map-active: #d8433b;
+}
+:root[data-theme='mushroom-kingdom'] .syflo-mindmap-pane .react-flow {
+  background-image:
+    radial-gradient(ellipse 52px 30px at 12% 14%, rgba(255, 255, 255, 0.9) 56%, transparent 76%),
+    radial-gradient(ellipse 40px 23px at 16.5% 15.5%, rgba(255, 255, 255, 0.85) 56%, transparent 76%),
+    radial-gradient(ellipse 58px 33px at 88% 62%, rgba(255, 255, 255, 0.9) 56%, transparent 76%),
+    radial-gradient(ellipse 42px 25px at 84% 63.5%, rgba(255, 255, 255, 0.85) 56%, transparent 76%),
+    radial-gradient(ellipse 46% 120px at 6% 106%, #7fc06c 60%, transparent 61%),
+    radial-gradient(ellipse 52% 140px at 60% 109%, #86c673 60%, transparent 61%),
+    radial-gradient(ellipse 48% 110px at 100% 106%, #4f9c41 60%, transparent 61%);
+}
+:root[data-theme='mushroom-kingdom'] .syflo-mindmap-pane .react-flow__edge-path {
+  stroke-width: 3.5;
+}
+
+/* Hyrule — Pergament-Knoten, Teal-Wurzel mit Goldrand, dünne Feldpfade */
+:root[data-theme='hyrule'] {
+  --syflo-think-a: #2aa198;
+  --syflo-think-b: #b8963a;
+  --syflo-ease-fun: cubic-bezier(0.35, 1.1, 0.45, 1);
+  --syflo-map-canvas: #efebda;
+  --syflo-map-dots: rgba(142, 144, 120, 0.35);
+  --syflo-map-node-bg: #f8f5e8;
+  --syflo-map-node-line: #c9bc8c;
+  --syflo-map-node-text: #33372a;
+  --syflo-map-root-bg: linear-gradient(165deg, #2faea4, #218a82);
+  --syflo-map-root-text: #fcfbf2;
+  --syflo-map-edge: #8e9078;
+  --syflo-map-active: #b8963a;
+}
+:root[data-theme='hyrule'] .syflo-map-node-root {
+  border-color: #b8963a;
+}
+:root[data-theme='hyrule'] .syflo-mindmap-pane .react-flow__edge-path {
+  stroke-width: 1.5;
+}
+/* Hyrule: sanfter Glow auf den Typing-Punkten (mockup v4, Zeile .typing .tdot) */
+:root[data-theme='hyrule'] .syflo-typing-dot {
+  box-shadow: 0 0 6px currentColor;
+}
+
+/* Matrix — Phosphor-Knoten, gestrichelte grüne Pfade, Glow auf der Wurzel */
+:root[data-theme='matrix'] {
+  --syflo-think-a: #2be76b;
+  --syflo-think-b: #8cf5b0;
+  --syflo-ease-fun: steps(3, end);
+  --syflo-map-canvas: #030503;
+  --syflo-map-dots: rgba(43, 231, 107, 0.14);
+  --syflo-map-node-bg: #060c07;
+  --syflo-map-node-line: #1e5a2e;
+  --syflo-map-node-text: #7bc188;
+  --syflo-map-root-bg: #07290f;
+  --syflo-map-root-text: #2be76b;
+  --syflo-map-edge: rgba(43, 231, 107, 0.5);
+  --syflo-map-bw: 1px;
+  --syflo-map-active: #2be76b;
+}
+/* Matrix: Phosphor-Glow auf dem Aktiv-Ring */
+:root[data-theme='matrix'] .syflo-map-active-ring {
+  filter: drop-shadow(0 0 4px rgba(43, 231, 107, 0.5));
+}
+:root[data-theme='matrix'] .syflo-map-node-root {
+  border-color: #2be76b;
+  text-shadow: 0 0 8px rgba(43, 231, 107, 0.4);
+}
+:root[data-theme='matrix'] .syflo-mindmap-pane .react-flow__edge-path {
+  stroke-width: 1.5;
+  stroke-dasharray: 6 4;
 }
 
 /*
@@ -57,9 +1000,10 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.15);
+  /* Derived from the theme's neutral scale so it stays visible on dark themes too */
+  background: color-mix(in srgb, var(--color-gray-500) 35%, transparent);
   border-radius: 9999px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.25);
+  background: color-mix(in srgb, var(--color-gray-500) 55%, transparent);
 }

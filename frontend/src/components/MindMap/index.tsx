@@ -3,7 +3,6 @@ import {
   ReactFlow,
   Background,
   Controls,
-  MarkerType,
   BaseEdge,
   EdgeLabelRenderer,
   Handle,
@@ -85,14 +84,13 @@ function FloatingEdge({ id, source, target, markerEnd, style, label, labelStyle 
       {label != null && label !== '' && (
         <EdgeLabelRenderer>
           <div
-            className="nodrag nopan"
+            className="nodrag nopan syflo-map-edge-label"
             data-testid="mindmap-edge-label"
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
             style={{
               position: 'absolute',
               transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
-              background: 'white',
               padding: '2px 6px',
               borderRadius: '4px',
               pointerEvents: 'all',
@@ -136,13 +134,29 @@ interface ChatNodeData {
   parentWord?: string | null;
   preview?: string | null;
   messageCount?: number;
-  color: string;
   isRoot: boolean;
+  isActive: boolean;
 }
 
+// Titel-Kürzung: Ein Klick auf den Knoten springt ohnehin an die Stelle im
+// Chat — der Knoten muss den Text also nicht komplett zeigen. Ohne Clamp
+// sprengen Branch-Titel aus langen Markierungen („About: <ganzer Absatz>")
+// die Karte (Nutzerkorrektur 2026-07-22).
+const TITLE_CLAMP_LINES = 3;
+
 function ChatNodeView({ data }: NodeProps) {
-  const { title, parentWord, preview, messageCount, color, isRoot } = data as unknown as ChatNodeData;
+  const { title, parentWord, preview, messageCount, isRoot, isActive } =
+    data as unknown as ChatNodeData;
   const [hovered, setHovered] = useState(false);
+
+  // Inline-Style statt Tailwind-Klasse (gleiche Begründung wie previewStyle).
+  const titleStyle: React.CSSProperties = {
+    fontSize: isRoot ? 22 : 13,
+    display: '-webkit-box',
+    WebkitBoxOrient: 'vertical',
+    WebkitLineClamp: TITLE_CLAMP_LINES,
+    overflow: 'hidden',
+  };
 
   // Inline-Style statt Tailwind-Klasse für das line-clamp — vermeidet
   // mögliche Cascade-Layer-Konflikte mit Tailwind v4.
@@ -167,33 +181,28 @@ function ChatNodeView({ data }: NodeProps) {
     pointerEvents: 'none',
   };
 
-  // Wurzelknoten bleibt stilistisch in der gleichen Designsprache (flache Farbe,
-  // gleiche Schatten-Art). Prominenz kommt durch Größe, Schatten-Intensität und
-  // ein Badge — nicht durch Gradient/Ring/Glow.
-  const baseShadow = isRoot
-    ? '0 14px 36px rgba(0,0,0,0.35)'
-    : '0 4px 12px rgba(0,0,0,0.15)';
-  const hoverShadow = isRoot
-    ? '0 20px 48px rgba(0,0,0,0.4)'
-    : '0 12px 30px rgba(0,0,0,0.25)';
-
+  // Farben, Rahmen, Radius und Schatten kommen komplett aus index.css
+  // (.syflo-map-node / .syflo-map-node-root), damit die Karte der
+  // Designsprache des aktiven Themes folgt (design/mockup-mindmap-themes.html).
+  // Prominenz der Wurzel: Größe, Akzentfläche, stärkerer Offset-Schatten.
   return (
     <div
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
-      className="relative transition-all duration-150"
+      className={`relative transition-all duration-150 syflo-map-node${isRoot ? ' syflo-map-node-root' : ''}`}
       style={{
-        background: color,
-        color: 'white',
         width: isRoot ? 360 : 220,
         padding: isRoot ? '22px 26px' : '12px 14px',
-        borderRadius: 16,
-        boxShadow: hovered ? hoverShadow : baseShadow,
         transform: hovered ? 'scale(1.03)' : 'scale(1)',
       }}
     >
       <Handle type="target" position={Position.Top} style={handleStyle} isConnectable={false} />
       <Handle type="source" position={Position.Bottom} style={handleStyle} isConnectable={false} />
+
+      {/* Aktiv-Ring („marching ants", aus syflo-2 portiert): markiert den
+          Knoten des gerade geöffneten Chats. Farbe/Easing pro Theme über
+          index.css (.syflo-map-active-ring). */}
+      {isActive && <span aria-hidden className="syflo-map-active-ring" />}
 
       {/* Root-Badge: macht sofort klar, dass dies der Wurzelknoten ist.
           Gleiche Optik wie das Verzweigungs-Badge bei Kindern (Icon + Versalien),
@@ -213,10 +222,13 @@ function ChatNodeView({ data }: NodeProps) {
         </div>
       )}
 
-      {/* Titel */}
+      {/* Titel — geklammert auf TITLE_CLAMP_LINES Zeilen; der volle Text
+          steht als natives Tooltip zur Verfügung. */}
       <div
         className="font-semibold leading-tight break-words"
-        style={{ fontSize: isRoot ? 22 : 13 }}
+        style={titleStyle}
+        title={title}
+        data-testid="mindmap-node-title"
       >
         {title}
       </div>
@@ -250,8 +262,6 @@ interface Props {
   onSelect: (id: string) => void;
 }
 
-const COLORS = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
-
 // Radial layout: root sits at the origin, children radiate outward. Each
 // non-root parent fans its children in an arc centered on its own outward
 // direction, so a subtree always extends *away* from the center — never back
@@ -264,7 +274,10 @@ const RADIUS_STEP = 360;
 // a small offset is applied so descendants curve outward instead of stacking.
 const MAX_FAN = (Math.PI * 2) / 3; // 120°
 
-export function buildLayout(chats: Chat[]): { nodes: Node[]; edges: Edge[] } {
+export function buildLayout(
+  chats: Chat[],
+  activeChatId?: string | null
+): { nodes: Node[]; edges: Edge[] } {
   const nodes: Node[] = [];
   const edges: Edge[] = [];
   const posMap: Record<string, { x: number; y: number }> = {};
@@ -326,39 +339,50 @@ export function buildLayout(chats: Chat[]): { nodes: Node[]; edges: Edge[] } {
 
   // Build nodes & edges
   const addNodes = (chat: Chat, depth: number) => {
-    const color = COLORS[depth % COLORS.length];
     const isRoot = depth === 0;
     // Maße direkt am Node-Objekt setzen, damit React Flow sie ab dem ersten
     // Render kennt. Sonst rechnet FloatingEdge mit width/height = 0 und der
     // Edge-Pfad kollabiert zu Länge 0 → unsichtbare Linie.
     const width = isRoot ? 360 : 220;
-    const estimatedHeight = (isRoot ? 22 : 0) + (chat.parent_word ? 18 : 0) + (isRoot ? 32 : 22) + (chat.preview ? 36 : 0) + ((chat.message_count ?? 0) > 0 ? 18 : 0) + (isRoot ? 44 : 24);
+    // Titelhöhe: grob Zeichen pro Zeile schätzen, gedeckelt durch das
+    // Line-Clamp der Node-Ansicht — lange Titel machen den Knoten sonst
+    // in der Schätzung endlos hoch und die Edge-Anker wandern weg.
+    const charsPerLine = isRoot ? 26 : 30;
+    const titleLines = Math.min(TITLE_CLAMP_LINES, Math.max(1, Math.ceil(chat.title.length / charsPerLine)));
+    const titleHeight = (isRoot ? 32 : 22) + (titleLines - 1) * (isRoot ? 26 : 16);
+    const estimatedHeight = (isRoot ? 22 : 0) + (chat.parent_word ? 18 : 0) + titleHeight + (chat.preview ? 36 : 0) + ((chat.message_count ?? 0) > 0 ? 18 : 0) + (isRoot ? 44 : 24);
+    const isActive = chat.id === activeChatId;
     nodes.push({
       id: chat.id,
       type: 'chat',
       position: posMap[chat.id] || { x: 0, y: 0 },
       width,
       height: estimatedHeight,
+      // Der aktive Knoten liegt über seinen Nachbarn, damit sein Ring nicht
+      // von überlappenden Karten verdeckt wird (wie in syflo-2).
+      zIndex: isActive ? 5 : 0,
       data: {
         title: chat.title,
         parentWord: chat.parent_word,
         preview: chat.preview,
         messageCount: chat.message_count,
-        color,
         isRoot,
+        isActive,
       },
     });
 
     if (chat.parent_id) {
+      // Kein stroke/marker inline: Kantenfarbe, -stärke und -stil kommen aus
+      // index.css (.syflo-mindmap-pane .react-flow__edge-path), damit sie die
+      // Linientinte des aktiven Themes tragen. Pfeilspitzen entfallen wie im
+      // Mockup — die Richtung ergibt sich aus dem radialen Layout.
       edges.push({
         id: `${chat.parent_id}-${chat.id}`,
         source: chat.parent_id,
         target: chat.id,
         label: chat.parent_word || '',
-        style: { stroke: color, strokeWidth: 2 },
-        labelStyle: { fontSize: '11px', fill: color, fontWeight: '500' },
+        labelStyle: { fontSize: '11px', fontWeight: '500' },
         type: 'floating',
-        markerEnd: { type: MarkerType.ArrowClosed, color, width: 18, height: 18 },
       });
     }
 
@@ -410,16 +434,19 @@ export function MindMap({ chats, activeChatId, onSelect }: Props) {
     return n.map(node => (saved[node.id] ? { ...node, position: saved[node.id] } : node));
   };
 
-  const { nodes: initialNodes, edges: initialEdges } = useMemo(() => buildLayout(activeTree), [activeTree]);
+  const { nodes: initialNodes, edges: initialEdges } = useMemo(
+    () => buildLayout(activeTree, activeChatId),
+    [activeTree, activeChatId]
+  );
   const [nodes, setNodes, onNodesChange] = useNodesState(applySaved(initialNodes));
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
 
   useEffect(() => {
-    const { nodes: n, edges: e } = buildLayout(activeTree);
+    const { nodes: n, edges: e } = buildLayout(activeTree, activeChatId);
     setNodes(applySaved(n));
     setEdges(e);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTree]);
+  }, [activeTree, activeChatId]);
 
   // Nach jedem Drag die neue Position merken.
   const handleNodeDragStop = (_: unknown, node: Node) => {
@@ -443,7 +470,9 @@ export function MindMap({ chats, activeChatId, onSelect }: Props) {
   }
 
   return (
-    <div className="w-full h-full">
+    // syflo-mindmap-pane: Canvas-Fläche, Punktraster, Kanten und Knoten
+    // werden in index.css pro Theme eingefärbt (mockup-mindmap-themes.html).
+    <div className="w-full h-full syflo-mindmap-pane">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -456,7 +485,8 @@ export function MindMap({ chats, activeChatId, onSelect }: Props) {
         fitView
         fitViewOptions={{ padding: 0.3 }}
       >
-        <Background color="#e0e7ff" gap={20} />
+        {/* Punktfarbe als CSS-Variable, damit sie dem Theme folgt (SVG-fill akzeptiert var()) */}
+        <Background color="var(--syflo-map-dots)" gap={20} />
         <Controls />
       </ReactFlow>
     </div>

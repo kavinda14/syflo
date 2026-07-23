@@ -165,6 +165,45 @@ describe('api.sendMessageStream', () => {
     ).rejects.toThrow('Ollama is not running');
   });
 
+  it('forwards the think flag and surfaces the thinking status event', async () => {
+    vi.mocked(fetch).mockReturnValue(mockSSEResponse([
+      { thinking: true },
+      { delta: 'Answer' },
+      { done: true, userMessage: mockUser, assistantMessage: mockAssistant },
+    ]));
+
+    const onThinking = vi.fn();
+    await api.sendMessageStream('c1', 'Hard question', vi.fn(), [], undefined, {
+      think: true,
+      onThinking,
+    });
+
+    expect(fetch).toHaveBeenCalledWith('/api/chats/c1/messages', expect.objectContaining({
+      body: JSON.stringify({ content: 'Hard question', think: true }),
+    }));
+    expect(onThinking).toHaveBeenCalledTimes(1);
+  });
+
+  it('streams reasoning deltas to onReasoning without mixing them into the answer', async () => {
+    vi.mocked(fetch).mockReturnValue(mockSSEResponse([
+      { thinking: true },
+      { reasoning: 'Let me think' },
+      { reasoning: ' about this…' },
+      { delta: 'Answer' },
+      { done: true, userMessage: mockUser, assistantMessage: mockAssistant },
+    ]));
+
+    const deltas: string[] = [];
+    const reasoning: string[] = [];
+    await api.sendMessageStream('c1', 'Hard question', d => deltas.push(d), [], undefined, {
+      think: true,
+      onReasoning: r => reasoning.push(r),
+    });
+
+    expect(reasoning.join('')).toBe('Let me think about this…');
+    expect(deltas).toEqual(['Answer']);
+  });
+
   it('handles multiple SSE chunks arriving in one network packet', async () => {
     // Simulate two events packed into a single ReadableStream chunk
     const encoder = new TextEncoder();

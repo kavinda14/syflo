@@ -14,6 +14,52 @@
  * `extractColumnAwareSelectionText()` (text-only consumer) and the
  * mouseup-driven selection-rewrite logic in `PdfView` (visual highlight fix).
  */
+// ── Drag-Punkt-Verfolgung ────────────────────────────────────────────────
+// Endet (oder startet) ein Drag im LEERRAUM neben einer Formel, snappt
+// Chrome den Selektions-Fokus auf die nächste Textfluss-Position — und die
+// kann bei den absolut positionierten pdf.js-Spans viele Absätze entfernt
+// liegen (Repro 2026-07-22: Drag bis kurz vor die Gleichungsnummer ließ die
+// native Selektion von 41 auf >1000 Zeichen anschwellen). Die Maus-Punkte
+// des Drags sind die einzige verlässliche Quelle der Nutzer-Absicht: PdfView
+// meldet sie hier an, das Band-Clipping unten nutzt sie bevorzugt. Die
+// Y-Werte werden in Inhalts-Koordinaten des Scroll-Containers gespeichert,
+// damit Autoscroll während des Drags sie nicht verfälscht.
+interface DragPoint {
+  yContent: number;
+  scroller: HTMLElement | null;
+}
+let dragStartPoint: DragPoint | null = null;
+let dragEndPoint: DragPoint | null = null;
+
+function toClientY(p: DragPoint): number {
+  return p.yContent - (p.scroller?.scrollTop ?? 0);
+}
+
+export function noteSelectionDragStart(clientY: number, scroller: HTMLElement | null): void {
+  dragStartPoint = { yContent: clientY + (scroller?.scrollTop ?? 0), scroller };
+  dragEndPoint = null;
+}
+
+export function noteSelectionDragMove(clientY: number): void {
+  if (!dragStartPoint) return;
+  dragEndPoint = {
+    yContent: clientY + (dragStartPoint.scroller?.scrollTop ?? 0),
+    scroller: dragStartPoint.scroller,
+  };
+}
+
+export function clearSelectionDragPoints(): void {
+  dragStartPoint = null;
+  dragEndPoint = null;
+}
+
+// Besitzenden Text-Layer-Span eines Range-/Selection-Knotens finden.
+function findOwningSpan(node: Node | null): HTMLElement | null {
+  if (!node) return null;
+  const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+  return (el?.closest?.('.textLayer span') ?? null) as HTMLElement | null;
+}
+
 interface ColumnAwareSelection {
   // The `.textLayer` element that owns the live selection.
   textLayer: HTMLElement;
@@ -60,15 +106,66 @@ function filterColumnAwareSelectionSpans(): ColumnAwareSelection | null {
   // multi-line drag inside one column it's one rect per line, all hugging the
   // column. Crucially, no rect crosses the gutter — that's why this approach
   // sidesteps the cross-column leak.
-  const lineRects = Array.from(range.getClientRects()).filter(
+  const rawLineRects = Array.from(range.getClientRects()).filter(
     (r) => r.width > 0 && r.height > 0,
   );
-  if (lineRects.length === 0) return null;
+  if (rawLineRects.length === 0) return null;
 
   // Collect every span in the active text layer once — we'll bucket them into
   // line rects below. Filtering to `.textLayer span` keeps us off the canvas
   // and any overlay siblings (highlights, search marks).
   const spans = Array.from(textLayer.querySelectorAll('span')) as HTMLElement[];
+
+  // Formula guard. LaTeX emits formula glyphs (fraction bars, integrals,
+  // radicals) both out of visual order and several times taller than the
+  // running text. A drag across a formula therefore yields a DOM range whose
+  // client rects (a) cover the lines above/below via tall glyph boxes and
+  // (b) include stowaway rects from spans of unrelated sentences that sit
+  // between anchor and focus in DOM order — plus (c) Chrome snaps the focus
+  // to a far-away text-flow position when the pointer is in whitespace next
+  // to a formula. Clip every line rect to the vertical band the user
+  // actually dragged through. Source of truth for the band, in order:
+  //   1. the drag's mouse points (PdfView reports them) — immune to (c);
+  //   2. the range's boundary spans, each capped to ~1.5× the median span
+  //      height so a tall boundary glyph can't blow the band open.
+  // For a plain prose drag the band spans exactly the dragged lines, so
+  // nothing changes.
+  const spanHeights = spans
+    .map((s) => s.getBoundingClientRect().height)
+    .filter((h) => h > 0)
+    .sort((a, b) => a - b);
+  const medianSpanH = spanHeights.length
+    ? spanHeights[Math.floor(spanHeights.length / 2)]
+    : 0;
+  const maxLineH = medianSpanH * 1.5;
+  let bandTop = -Infinity;
+  let bandBottom = Infinity;
+  const startSpanForBand = findOwningSpan(range.startContainer);
+  const endSpanForBand = findOwningSpan(range.endContainer);
+  if (medianSpanH > 0 && dragStartPoint) {
+    const y1 = toClientY(dragStartPoint);
+    const y2 = dragEndPoint ? toClientY(dragEndPoint) : y1;
+    bandTop = Math.min(y1, y2) - maxLineH * 0.75;
+    bandBottom = Math.max(y1, y2) + maxLineH * 0.75;
+  } else if (medianSpanH > 0 && startSpanForBand && endSpanForBand) {
+    const clampToLine = (r: DOMRect) => {
+      if (r.height <= maxLineH) return { top: r.top, bottom: r.bottom };
+      const cy = r.top + r.height / 2;
+      return { top: cy - maxLineH / 2, bottom: cy + maxLineH / 2 };
+    };
+    const s = clampToLine(startSpanForBand.getBoundingClientRect());
+    const e = clampToLine(endSpanForBand.getBoundingClientRect());
+    bandTop = Math.min(s.top, e.top) - 2;
+    bandBottom = Math.max(s.bottom, e.bottom) + 2;
+  }
+  const lineRects = rawLineRects
+    .map((r) => {
+      const top = Math.max(r.top, bandTop);
+      const bottom = Math.min(r.bottom, bandBottom);
+      return bottom - top > 0 ? new DOMRect(r.left, top, r.width, bottom - top) : null;
+    })
+    .filter((r): r is DOMRect => r !== null);
+  if (lineRects.length === 0) return null;
 
   type Kept = { span: HTMLElement; top: number; left: number; lineIdx: number };
   const kept: Kept[] = [];
@@ -113,20 +210,19 @@ function filterColumnAwareSelectionSpans(): ColumnAwareSelection | null {
   // title is missing the first or last selected word). The startContainer /
   // endContainer are the source of truth for "the user definitely meant this
   // span" because that's where their cursor literally started or ended.
-  const findOwningSpan = (node: Node | null): HTMLElement | null => {
-    if (!node) return null;
-    const el = node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
-    return (el?.closest?.('.textLayer span') ?? null) as HTMLElement | null;
-  };
+  // Ausnahme: liegt der Boundary-Span KOMPLETT außerhalb des Drag-Bands,
+  // ist er kein Nutzer-Endpunkt, sondern Chromes Leerraum-Snap auf eine
+  // entfernte Textfluss-Position — dann gerade NICHT einschleusen.
   const boundaryPairs: Array<[HTMLElement | null, number]> = [
-    [findOwningSpan(range.startContainer), 0],
-    [findOwningSpan(range.endContainer), Math.max(0, lineRects.length - 1)],
+    [startSpanForBand, 0],
+    [endSpanForBand, Math.max(0, lineRects.length - 1)],
   ];
   for (const [span, lineIdx] of boundaryPairs) {
     if (!span || seen.has(span)) continue;
     if (!textLayer.contains(span)) continue;
     const r = span.getBoundingClientRect();
     if (r.width === 0 || r.height === 0) continue;
+    if (r.bottom < bandTop || r.top > bandBottom) continue;
     kept.push({ span, top: r.top, left: r.left, lineIdx });
     seen.add(span);
   }
@@ -402,12 +498,26 @@ export function constrainSelectionToColumn(): boolean {
   const filtered = filterColumnAwareSelectionSpans();
   if (!filtered) return false;
   const { textLayer, spans, lineRects } = filtered;
-  if (!isMultiColumnLayout(lineRects, textLayer)) return false;
   if (spans.length === 0) return false;
 
   const sel = window.getSelection?.();
   if (!sel || sel.rangeCount === 0) return false;
   const original = sel.getRangeAt(0);
+
+  // Rewrite in zwei Fällen: mehrspaltiges Layout (klassisches Spalten-Leck)
+  // ODER ein Range-Ende, das nicht auf einem behaltenen Span liegt — dann
+  // hat Chrome den Leerraum neben einer Formel auf eine entfernte Textfluss-
+  // Position gesnappt. Wichtig: bei einem Leerraum-Snap ist der Container
+  // oft das textLayer-DIV selbst (findOwningSpan → null) — auch das zählt
+  // als entkommen, sonst kopiert ⌘C weiterhin die angeschwollene Selektion.
+  const snapEscaped = (() => {
+    const startSpan = findOwningSpan(original.startContainer);
+    const endSpan = findOwningSpan(original.endContainer);
+    return (
+      !startSpan || !spans.includes(startSpan) || !endSpan || !spans.includes(endSpan)
+    );
+  })();
+  if (!isMultiColumnLayout(lineRects, textLayer) && !snapEscaped) return false;
 
   // PDF.js packs an entire visual line into a single span. The old impl did
   // `setStartBefore(firstSpan)` / `setEndAfter(lastSpan)` which expanded a

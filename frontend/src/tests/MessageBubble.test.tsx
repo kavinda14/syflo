@@ -104,8 +104,9 @@ describe('MessageBubble – streaming cursor', () => {
     const { container } = render(
       <MessageBubble message={emptyMsg} isStreaming={true} onWordRightClick={vi.fn()} />
     );
-    // Empty stream → the Syflo wave-loop ThinkingIndicator is rendered
-    expect(container.querySelector('.ft-thinking-wave')).toBeInTheDocument();
+    // Empty stream → the three-dot typing bubble is rendered (mockup v4 .typing)
+    expect(container.querySelector('.syflo-typing')).toBeInTheDocument();
+    expect(container.querySelectorAll('.syflo-typing-dot')).toHaveLength(3);
   });
 });
 

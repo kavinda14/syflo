@@ -11,7 +11,11 @@
  * 4. A button to open a new branched chat focused on the word.
  *
  * Positioning: the popup tries to appear just to the right and below the
- * click point, but clamps to the viewport edges so it never gets cut off.
+ * click point, but clamps to the viewport edges so it never gets cut off —
+ * against its MEASURED height (a ResizeObserver re-clamps when the content
+ * grows, e.g. once the definition arrives or edit mode opens). On very small
+ * windows the card caps at the viewport height and scrolls internally. The
+ * header doubles as a drag handle so the user can move the popup around.
  *
  * Design: 1:1 port of Syflo's FloatingPopup — the color row mirrors
  * design/mockup-popup-edit-labels.html; both states use the same blue-50
@@ -19,8 +23,8 @@
  * separate dialog.
  */
 
-import { useState, useEffect } from 'react';
-import { X, GitBranch, Loader2, Copy, Check, Pencil, RotateCcw } from 'lucide-react';
+import { useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { X, GitBranch, Loader2, Copy, Check, MessageSquare, Pencil, RotateCcw } from 'lucide-react';
 import type { HighlightColor, WordPopup } from '../../types';
 import { HIGHLIGHT_COLORS } from '../../types';
 import { useLabels } from '../../hooks/useLabels';
@@ -38,6 +42,11 @@ interface Props {
   // The color a highlight created via "Open as new chat" would get, and the
   // swatch that shows the ring + checkmark. Defaults to yellow.
   activeColor?: HighlightColor;
+  // "Ask in chat" (mockup-chat-highlights-ask-in-chat.html): drop the
+  // selection as a quote into the active chat's composer — no branch. Only
+  // set when the popup came from a selection (PDF or chat text); it renders
+  // as the primary footer button and demotes "Open as new chat" to secondary.
+  onAskInChat?: (word: string, context: string) => void;
 }
 
 // Tailwind doesn't pick up dynamic class names, so we keep an explicit map.
@@ -59,8 +68,15 @@ export function FloatingPopup({
   onOpenChildChat,
   onPickColor,
   activeColor = 'yellow',
+  onAskInChat,
 }: Props) {
   const [pos, setPos] = useState({ x: 0, y: 0 });
+  const cardRef = useRef<HTMLDivElement>(null);
+  // Solange der Nutzer nicht selbst gezogen hat, darf jede Neumessung die
+  // Position re-clampen; nach einem Drag bleibt die gewählte Position stehen
+  // (nur noch an den Viewport geklemmt).
+  const draggedRef = useRef(false);
+  const dragRef = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
   const [copied, setCopied] = useState(false);
   // Long-phrase header truncation/expand state.
   const [expanded, setExpanded] = useState(false);
@@ -81,21 +97,94 @@ export function FloatingPopup({
     if (editingLabels) setLabelDraft(labels);
   }, [editingLabels, labels]);
 
+  // Clamp a position so the card stays fully inside the viewport, using the
+  // card's real rendered size (falls back to the nominal width before the
+  // first paint).
+  const clampToViewport = (x: number, y: number) => {
+    const w = cardRef.current?.offsetWidth ?? 340;
+    const h = cardRef.current?.offsetHeight ?? 0;
+    return {
+      x: Math.max(8, Math.min(x, window.innerWidth - w - 8)),
+      y: Math.max(8, Math.min(y, window.innerHeight - h - 8)),
+    };
+  };
+
   // Recalculate the popup position whenever a new word is right-clicked.
-  // The height estimate is generous to leave room for the color row; edit
-  // mode grows further — the clamp handles overflow.
   useEffect(() => {
     if (!popup) return;
-    const w = 340;
-    const h = 380;
-    setPos({
-      x: Math.min(popup.x + 12, window.innerWidth - w - 16),
-      y: Math.min(popup.y + 12, window.innerHeight - h - 16),
-    });
+    draggedRef.current = false;
+    setPos(clampToViewport(popup.x + 12, popup.y + 12));
     setCopied(false);
     setExpanded(false);
     setEditingLabels(false);
   }, [popup]);
+
+  // Klick außerhalb der Karte oder Escape schließt das Popup (Nutzer-Report
+  // 2026-07-22, 3. Runde): Ohne das blieb der Pending-Selektions-Zustand
+  // aktiv und funkte jeder NEUEN Textauswahl dazwischen (einfache Klicks
+  // stellten das alte Zitat wieder her, die Markierung wechselte beim
+  // Wegklicken sichtbar den Stil). mousedown statt click, damit der Zustand
+  // schon aufgeräumt ist, BEVOR eine neue Auswahl beginnt — React flusht
+  // den State-Update synchron am Ende des mousedown-Handlers.
+  useEffect(() => {
+    if (!popup) return;
+    const onDocMouseDown = (e: MouseEvent) => {
+      const card = cardRef.current;
+      if (card && e.target instanceof Node && card.contains(e.target)) return;
+      onClose();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [popup, onClose]);
+
+  // Re-clamp against the MEASURED height after render and whenever the card
+  // grows (definition loaded, color row appeared, edit mode opened) — the
+  // fixed estimate used before let the footer slide below small viewports.
+  // After a manual drag the user's position wins; we only keep it on-screen.
+  useLayoutEffect(() => {
+    const card = cardRef.current;
+    if (!card || !popup) return;
+    const reclamp = () => {
+      setPos((p) => {
+        const base = draggedRef.current ? p : { x: popup.x + 12, y: popup.y + 12 };
+        const next = clampToViewport(base.x, base.y);
+        return next.x === p.x && next.y === p.y ? p : next;
+      });
+    };
+    reclamp();
+    const ro = new ResizeObserver(reclamp);
+    ro.observe(card);
+    window.addEventListener('resize', reclamp);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', reclamp);
+    };
+  }, [popup]);
+
+  // Drag am Header: Buttons im Header bleiben klickbar (kein Drag-Start auf
+  // ihnen); während des Drags hält Pointer-Capture die Bewegung stabil.
+  const handleDragPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if ((e.target as HTMLElement).closest('button, input')) return;
+    e.preventDefault();
+    dragRef.current = { pointerId: e.pointerId, offsetX: e.clientX - pos.x, offsetY: e.clientY - pos.y };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const handleDragPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== e.pointerId) return;
+    draggedRef.current = true;
+    setPos(clampToViewport(e.clientX - drag.offsetX, e.clientY - drag.offsetY));
+  };
+  const handleDragPointerEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId === e.pointerId) dragRef.current = null;
+  };
 
   const handleCopy = async () => {
     if (!popup) return;
@@ -133,11 +222,19 @@ export function FloatingPopup({
 
   return (
     <div
-      style={{ left: pos.x, top: pos.y, width: 340 }}
-      className="fixed z-50 bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
+      ref={cardRef}
+      style={{ left: pos.x, top: pos.y, width: 340, maxHeight: 'calc(100vh - 16px)' }}
+      className="fixed z-50 flex flex-col bg-white rounded-2xl shadow-2xl border border-gray-100 overflow-hidden"
     >
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b border-gray-100">
+      {/* Header — doubles as the drag handle (cursor signals it). */}
+      <div
+        onPointerDown={handleDragPointerDown}
+        onPointerMove={handleDragPointerMove}
+        onPointerUp={handleDragPointerEnd}
+        onPointerCancel={handleDragPointerEnd}
+        data-testid="popup-drag-handle"
+        className="shrink-0 flex items-start justify-between gap-3 px-5 pt-4 pb-3 border-b border-gray-100 cursor-move select-none touch-none"
+      >
         <div className="min-w-0 flex-1">
           <p className="text-[10px] font-medium uppercase tracking-wider text-gray-400 mb-0.5">
             Definition
@@ -180,8 +277,9 @@ export function FloatingPopup({
         </div>
       </div>
 
-      {/* Body */}
-      <div className="px-5 py-4 max-h-52 overflow-y-auto">
+      {/* Body — the flexible section: on very small viewports it shrinks
+          below max-h-52 and scrolls, so the color row + footer stay visible. */}
+      <div className="px-5 py-4 max-h-52 min-h-0 overflow-y-auto">
         {loading ? (
           <div className="flex items-center gap-2 text-gray-400 text-sm">
             <Loader2 size={14} className="animate-spin" />
@@ -195,7 +293,7 @@ export function FloatingPopup({
       {/* Color section — section header + row of swatches OR edit list.
           Only rendered when the parent captured a PDF selection. */}
       {showColors && (
-        <div className="border-t border-gray-100 px-5 pt-3 pb-2" data-testid="popup-color-section">
+        <div className="shrink-0 border-t border-gray-100 px-5 pt-3 pb-2" data-testid="popup-color-section">
           <div className="flex items-center justify-between mb-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">
               {editingLabels ? 'Rename colors' : 'Highlight color'}
@@ -290,19 +388,43 @@ export function FloatingPopup({
         </div>
       )}
 
-      {/* Footer — same blue style for both states, only icon + label changes */}
-      <div className="px-3 py-3 border-t border-gray-100 bg-gray-50">
-        <button
-          onClick={
-            editingLabels
-              ? () => void handleSaveLabels()
-              : () => onOpenChildChat(popup.word, popup.context)
-          }
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors"
-        >
-          {editingLabels ? <Check size={14} /> : <GitBranch size={14} />}
-          {editingLabels ? 'Save labels' : 'Open as new chat'}
-        </button>
+      {/* Footer. Edit mode: single Save button. Otherwise: with a selection
+          behind the popup, "Ask in chat" is primary and "Open as new chat"
+          drops to secondary (mockup-chat-highlights-ask-in-chat.html); with
+          no selection the single blue "Open as new chat" stays. */}
+      <div className="shrink-0 px-3 py-3 border-t border-gray-100 bg-gray-50 flex flex-col gap-1.5">
+        {editingLabels ? (
+          <button
+            onClick={() => void handleSaveLabels()}
+            className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors"
+          >
+            <Check size={14} />
+            Save labels
+          </button>
+        ) : (
+          <>
+            {onAskInChat && (
+              <button
+                onClick={() => onAskInChat(popup.word, popup.context)}
+                className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors"
+                data-testid="popup-ask-in-chat"
+              >
+                <MessageSquare size={14} />
+                Ask in chat
+              </button>
+            )}
+            <button
+              onClick={() => onOpenChildChat(popup.word, popup.context)}
+              // Bewusst identisch zum "Ask in chat"-Button (Nutzer-Entscheidung
+              // 2026-07-20): gleiche Fläche, gleiche Farbe, gleiche Theme-Outline —
+              // die Reihenfolge allein kommuniziert die Priorität.
+              className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-lg text-sm font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 transition-colors"
+            >
+              <GitBranch size={14} />
+              Open as new chat
+            </button>
+          </>
+        )}
       </div>
     </div>
   );

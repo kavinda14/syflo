@@ -16,13 +16,16 @@
  * pdfDocument wrapper so pdf.js stays out of component tests.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Minus, Plus, ChevronLeft, ChevronRight, FileText } from 'lucide-react';
 import { loadPdfDocument, type PdfDocumentHandle } from '../../pdf/pdfDocument';
 import {
+  clearSelectionDragPoints,
   computeTightLineRects,
   constrainSelectionToColumn,
   extractColumnAwareSelectionText,
+  noteSelectionDragMove,
+  noteSelectionDragStart,
   normalizeRectsToZoom,
 } from '../../pdf/selection';
 import type { Highlight, HighlightColor, HighlightRect } from '../../types';
@@ -33,6 +36,13 @@ export interface PdfHighlightSelection {
   pageNumber: number;
   text: string;
   rects: HighlightRect[];
+}
+
+// Imperative Sprung-API für den Highlights-Drawer: App hält eine Ref und
+// ruft scrollToHighlight, wenn eine PDF-Karte geklickt wird
+// (mockup-highlights-overview.html, Grill-Entscheidung 8: punktgenau + Flash).
+export interface PdfViewHandle {
+  scrollToHighlight: (highlightId: string) => void;
 }
 
 interface Props {
@@ -47,11 +57,31 @@ interface Props {
   onContextMenu?: (e: React.MouseEvent) => void;
   // Click an existing highlight → the parent opens the actions menu.
   onColorHighlightClick?: (highlight: Highlight, e: React.MouseEvent) => void;
+  // Solange das Auswahl-Popup offen ist: das transiente Auswahl-Overlay
+  // NICHT wegräumen, wenn die native Selektion kollabiert (der Klick ins
+  // Popup kollabiert sie zwangsläufig) — der Nutzer soll weiter sehen, was
+  // er markiert hat.
+  keepSelectionVisible?: boolean;
+  ref?: React.Ref<PdfViewHandle>;
 }
+
+// Dauer des Aufblink-Rings nach einem Drawer-Sprung.
+const FLASH_MS = 1500;
 
 const ZOOM_MIN = 0.5;
 const ZOOM_MAX = 3;
 const ZOOM_STEP = 0.25;
+
+// Satte Variante jeder Highlight-Farbe für den Flash-Glow nach einem
+// Drawer-Sprung (Nutzerkorrektur 2026-07-21: farbiger Glow statt schwarzem
+// Ring). Gleiche Deep-Töne wie die Chip-Punkte im Drawer.
+const HIGHLIGHT_GLOW_HEX: Record<HighlightColor, string> = {
+  yellow: '#CA8A04',
+  green: '#16A34A',
+  blue: '#2563EB',
+  pink: '#DB2777',
+  orange: '#EA580C',
+};
 
 // Tailwind class per highlight color — same pastel palette as the
 // FloatingPopup swatches (mockup-popup-edit-labels.html).
@@ -88,6 +118,8 @@ export function PdfView({
   onCaptureHighlight,
   onContextMenu,
   onColorHighlightClick,
+  keepSelectionVisible,
+  ref,
 }: Props) {
   const [doc, setDoc] = useState<PdfDocumentHandle | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -98,12 +130,31 @@ export function PdfView({
   // Re-entrancy guard for the column-aware selection rewrite (see the
   // mouseup effect below) — addRange() can synthesise a selectionchange.
   const isConstrainingRef = useRef(false);
+  // Linke Maustaste gedrückt? Ein Mousedown im Leerraum setzt kurz eine
+  // KOLLABIERTE Caret-Selektion → selectionchange → der Collapse-Cleanup
+  // unten würde die gerade notierten Drag-Punkte sofort wieder löschen.
+  // Solange die Taste unten ist, wird deshalb nicht aufgeräumt.
+  const isMouseDownRef = useRef(false);
   // Transient selection overlay: one tight rect per visible line while the
   // user has live text selected. Replaces the native blocky selection paint.
   const [transientSelection, setTransientSelection] = useState<{
     pageNumber: number;
     rects: HighlightRect[];
   } | null>(null);
+  // Live-Spiegel des keepSelectionVisible-Props für die DOM-Event-Handler
+  // (selectionchange läuft außerhalb des React-Renders).
+  const keepSelectionRef = useRef(false);
+  keepSelectionRef.current = !!keepSelectionVisible;
+
+  // Popup geschlossen (oder Aktion ausgeführt): falls die native Selektion
+  // inzwischen kollabiert ist, das festgehaltene Overlay jetzt wegräumen.
+  useEffect(() => {
+    if (keepSelectionVisible) return;
+    const sel = window.getSelection?.();
+    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
+      setTransientSelection(null);
+    }
+  }, [keepSelectionVisible]);
 
   useEffect(() => {
     let cancelled = false;
@@ -134,12 +185,35 @@ export function PdfView({
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    // Drag-Punkte an die Auswahl-Helfer melden (pdf/selection.ts): Chrome
+    // snappt den Selektions-Fokus im Leerraum neben Formeln auf entfernte
+    // Textfluss-Positionen — nur die echten Maus-Punkte tragen die Absicht.
+    const onMouseDown = (e: MouseEvent) => {
+      // Nur die LINKE Taste startet eine Auswahl. Der Rechtsklick (öffnet
+      // das Highlight-Popup über der bestehenden Auswahl) darf die Drag-
+      // Punkte des ursprünglichen Drags nicht überschreiben — sonst schnurrt
+      // das Band einer mehrzeiligen Auswahl auf die Rechtsklick-Zeile
+      // zusammen und die Highlight-Erfassung verliert Zeilen.
+      if (e.button !== 0) return;
+      isMouseDownRef.current = true;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('.textLayer')) {
+        noteSelectionDragStart(e.clientY, container);
+      } else {
+        clearSelectionDragPoints();
+      }
+    };
+    const onMouseMove = (e: MouseEvent) => {
+      if (e.buttons & 1) noteSelectionDragMove(e.clientY);
+    };
     const onMouseUp = (e: MouseEvent) => {
+      isMouseDownRef.current = false;
       if (isConstrainingRef.current) return;
       const target = e.target as HTMLElement | null;
       if (!target?.closest?.('.textLayer')) return;
       const sel = window.getSelection?.();
       if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+      noteSelectionDragMove(e.clientY);
 
       isConstrainingRef.current = true;
       try {
@@ -165,8 +239,15 @@ export function PdfView({
       // rAF update recomputes the same rects — harmless double work, but it
       // keeps the overlay consistent when the mouseup landed off-page.
     };
+    container.addEventListener('mousedown', onMouseDown);
+    container.addEventListener('mousemove', onMouseMove);
     container.addEventListener('mouseup', onMouseUp);
-    return () => container.removeEventListener('mouseup', onMouseUp);
+    return () => {
+      container.removeEventListener('mousedown', onMouseDown);
+      container.removeEventListener('mousemove', onMouseMove);
+      container.removeEventListener('mouseup', onMouseUp);
+      clearSelectionDragPoints();
+    };
   }, [doc, zoom]);
 
   // Live transient overlay while the user drags: the native selection paint
@@ -181,7 +262,12 @@ export function PdfView({
       raf = 0;
       const sel = window.getSelection?.();
       if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-        setTransientSelection(null);
+        // Popup offen → die erfasste Auswahl bleibt sichtbar, obwohl die
+        // native Selektion (durch den Klick ins Popup) kollabiert ist.
+        if (!keepSelectionRef.current) {
+          setTransientSelection(null);
+          if (!isMouseDownRef.current) clearSelectionDragPoints();
+        }
         return;
       }
       // Only react to selections anchored inside one of OUR text layers.
@@ -259,10 +345,41 @@ export function PdfView({
     pageRefs.current.get(clamped)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
+  // Sprung aus dem Highlights-Drawer: Rect vertikal mittig in den Viewport
+  // scrollen und das Highlight kurz aufblinken lassen. Alle Seiten sind
+  // eager gerendert, das Ziel existiert also immer sofort.
+  const [flashHighlightId, setFlashHighlightId] = useState<string | null>(null);
+  const flashTimerRef = useRef<number | null>(null);
+  useEffect(() => () => {
+    if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current);
+  }, []);
+
+  useImperativeHandle(ref, () => ({
+    scrollToHighlight: (highlightId: string) => {
+      const h = (highlights ?? []).find((x) => x.id === highlightId);
+      if (!h) return;
+      setCurrentPage(h.pageNumber);
+      const container = containerRef.current;
+      const pageEl = pageRefs.current.get(h.pageNumber);
+      if (container && pageEl) {
+        const rectTop = (h.rects[0]?.top ?? 0) * zoom;
+        const pageTopInContainer =
+          pageEl.getBoundingClientRect().top -
+          container.getBoundingClientRect().top +
+          container.scrollTop;
+        const target = pageTopInContainer + rectTop - container.clientHeight / 2;
+        container.scrollTo?.({ top: Math.max(0, target), behavior: 'smooth' });
+      }
+      setFlashHighlightId(highlightId);
+      if (flashTimerRef.current !== null) window.clearTimeout(flashTimerRef.current);
+      flashTimerRef.current = window.setTimeout(() => setFlashHighlightId(null), FLASH_MS);
+    },
+  }));
+
   const pages = doc ? Array.from({ length: doc.numPages }, (_, i) => i + 1) : [];
 
   return (
-    <div className="flex-1 flex flex-col min-w-0 bg-gray-100">
+    <div className="syflo-pdf-pane flex-1 flex flex-col min-w-0 bg-gray-100">
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-4 py-2 bg-white border-b border-gray-200 shrink-0">
         <div className="flex items-center gap-2 min-w-0 flex-1 text-sm text-gray-700">
@@ -333,6 +450,7 @@ export function PdfView({
                 pageNumber={n}
                 zoom={zoom}
                 highlights={(highlights ?? []).filter(h => h.pageNumber === n)}
+                flashHighlightId={flashHighlightId}
                 transientRects={
                   transientSelection && transientSelection.pageNumber === n
                     ? transientSelection.rects
@@ -359,6 +477,7 @@ function PdfPageView({
   pageNumber,
   zoom,
   highlights,
+  flashHighlightId,
   transientRects,
   onColorHighlightClick,
   registerPage,
@@ -367,6 +486,7 @@ function PdfPageView({
   pageNumber: number;
   zoom: number;
   highlights: Highlight[];
+  flashHighlightId: string | null;
   transientRects: HighlightRect[] | null;
   onColorHighlightClick?: (highlight: Highlight, e: React.MouseEvent) => void;
   registerPage: (el: HTMLDivElement | null) => void;
@@ -434,6 +554,7 @@ function PdfPageView({
             type="button"
             data-testid={`pdf-color-highlight-${h.id}`}
             data-color={h.color}
+            data-flash={flashHighlightId === h.id ? 'true' : undefined}
             title={h.text}
             onClick={(e) => {
               e.stopPropagation();
@@ -458,6 +579,38 @@ function PdfPageView({
           />
         )),
       )}
+      {/* Flash-Glow nach einem Drawer-Sprung: eigenes Overlay über dem
+          Highlight (normaler Blend), damit der farbige Schein leuchtet, ohne
+          den Multiply-Blend der Markierung anzufassen. Alle Zeilen-Rects
+          liegen in EINEM Container mit drop-shadow — der Glow folgt der
+          gemeinsamen Silhouette, mehrzeilige Markierungen leuchten als eine
+          Form ohne hellere Nähte an den Zeilengrenzen. */}
+      {highlights
+        .filter((h) => h.id === flashHighlightId)
+        .map((h) => (
+          <div
+            key={`flash-${h.id}`}
+            aria-hidden="true"
+            className="absolute inset-0 pointer-events-none syflo-hl-flash-group"
+            style={{
+              zIndex: 5,
+              ...({ '--flash-color': HIGHLIGHT_GLOW_HEX[h.color] } as React.CSSProperties),
+            }}
+          >
+            {h.rects.map((r, idx) => (
+              <div
+                key={idx}
+                className="absolute rounded-[2px]"
+                style={{
+                  left: r.left * zoom,
+                  top: r.top * zoom,
+                  width: r.width * zoom,
+                  height: r.height * zoom,
+                }}
+              />
+            ))}
+          </div>
+        ))}
     </div>
   );
 }

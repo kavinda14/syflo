@@ -8,7 +8,7 @@
  */
 
 const express = require('express');
-const { getLLMClient } = require('../llm');
+const { getLLMClient, noThinkExtras } = require('../llm');
 
 module.exports = (db) => {
   // router is created inside the factory so each call gets a fresh instance.
@@ -24,12 +24,13 @@ module.exports = (db) => {
     if (!word) return res.status(400).json({ error: 'word is required' });
 
     try {
-      const { client, model } = getLLMClient(db);
+      const { client, model, provider } = getLLMClient(db);
       // Ask the model for a short, plain-text definition only — no example
       // sentence, no markdown formatting. The popup renders the response as
       // plain text, so any ** or # tokens would show up literally.
       const completion = await client.chat.completions.create({
         model,
+        ...noThinkExtras(provider),
         messages: [
           {
             role: 'system',

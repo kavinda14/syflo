@@ -55,9 +55,10 @@ describe('POST /api/papers — upload a PDF into a chat tree', () => {
     expect(res.body.status).toBe('ready');
     expect(res.body.pdf_url).toBe(`/api/papers/${res.body.id}/pdf`);
 
-    // The tree root now carries the paper binding.
+    // The tree root now carries the paper binding and is named after it.
     const detail = await request(app).get(`/api/chats/${chat.id}`);
     expect(detail.body.paper_id).toBe(res.body.id);
+    expect(detail.body.title).toBe('lease-agreement');
   });
 
   it('binds to the tree ROOT when uploading from a branch', async () => {
@@ -69,8 +70,11 @@ describe('POST /api/papers — upload a PDF into a chat tree', () => {
 
     const rootDetail = await request(app).get(`/api/chats/${root.id}`);
     expect(rootDetail.body.paper_id).toBe(res.body.id);
+    expect(rootDetail.body.title).toBe('lease-agreement');
     const branchDetail = await request(app).get(`/api/chats/${branch.id}`);
     expect(branchDetail.body.paper_id).toBeNull();
+    // Only the root is renamed — the branch keeps its own title.
+    expect(branchDetail.body.title).toBe('Branch');
   });
 
   it('rejects a second PDF for the same tree with tree-has-pdf (ADR-0002)', async () => {

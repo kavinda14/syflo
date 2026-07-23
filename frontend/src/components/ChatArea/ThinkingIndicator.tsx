@@ -1,78 +1,68 @@
-import { useState, useEffect } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
+/**
+ * ThinkingIndicator — the chat's loading state while the assistant has not
+ * yet produced its first token.
+ *
+ * Design source of truth: design/mockup-fun-themes-v4.html (.typing / .tdot /
+ * @keyframes bounce). An AI-side bubble containing three bouncing dots; dot
+ * colors and easing follow the active theme via --syflo-think-a/-b and
+ * --syflo-ease-fun. All styling lives in index.css (.syflo-typing) so themes
+ * can override it (e.g. Hyrule's phosphor glow).
+ *
+ * `withTips`: während einer echten Denk-Phase (Reasoning-Modell, think=on)
+ * rotiert unter denselben Punkten eine Tipp-/Zitat-Zeile
+ * (design/mockup-model-picker.html, Sektion 04). Die Gedankenkette selbst
+ * wird nie gezeigt.
+ */
 
-const phrases = [
-  'Liest deine Frage',
-  'Denkt nach',
-  'Sammelt Gedanken',
-  'Formuliert Antwort',
-];
+import { useEffect, useMemo, useState } from 'react';
+import { THINKING_LINE_INTERVAL_MS } from './thinkingTips';
+import { getThinkingFeed } from './thinkingFeed';
 
-export function ThinkingIndicator() {
-  const [idx, setIdx] = useState(0);
+export function ThinkingIndicator({ withTips = false }: { withTips?: boolean }) {
+  return (
+    <div role="status" aria-label="Assistant is thinking">
+      <div className="syflo-typing">
+        <span className="syflo-typing-dot" />
+        <span className="syflo-typing-dot" />
+        <span className="syflo-typing-dot" />
+      </div>
+      {withTips && <ThinkingTipLine />}
+    </div>
+  );
+}
+
+function ThinkingTipLine() {
+  // App-weiter Feed (thinkingFeed.ts): 50/50 Tipp/Zitat pro Zeile, aktiver
+  // Zitat-Pool mit Ausmusterung nach 3 Anzeigen, Fortschritt in localStorage.
+  const feed = useMemo(() => getThinkingFeed(), []);
+  const [line, setLine] = useState(() => feed.next());
+  const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    const t = setInterval(() => setIdx(i => (i + 1) % phrases.length), 2200);
-    return () => clearInterval(t);
-  }, []);
+    const t = window.setInterval(() => {
+      setLine(feed.next());
+      setTick(i => i + 1);
+    }, THINKING_LINE_INTERVAL_MS);
+    return () => window.clearInterval(t);
+  }, [feed]);
 
   return (
-    <div className="flex items-center gap-2.5 text-sm text-gray-400">
-      <svg
-        width={24}
-        height={24}
-        viewBox="0 0 32 32"
-        aria-hidden="true"
-        style={{ overflow: 'visible' }}
-      >
-        <style>{`
-          @keyframes ft-thinking-draw {
-            0%   { stroke-dashoffset: 30; }
-            50%  { stroke-dashoffset: 0; }
-            100% { stroke-dashoffset: -30; }
-          }
-          .ft-thinking-wave {
-            fill: none;
-            stroke: url(#ft-thinking-grad);
-            stroke-width: 2;
-            stroke-linecap: round;
-            stroke-dasharray: 30;
-            animation: ft-thinking-draw 1.8s ease-in-out infinite;
-          }
-          .ft-thinking-wave--bot { animation-delay: 0.3s; }
-          @media (prefers-reduced-motion: reduce) {
-            .ft-thinking-wave {
-              stroke-dasharray: none;
-              stroke-dashoffset: 0;
-              animation: none;
-            }
-          }
-        `}</style>
-        <defs>
-          <linearGradient id="ft-thinking-grad" x1="0" x2="1">
-            <stop offset="0%"   stopColor="#3B82F6" />
-            <stop offset="50%"  stopColor="#1FB6A6" />
-            <stop offset="100%" stopColor="#34D399" />
-          </linearGradient>
-        </defs>
-        <path className="ft-thinking-wave" d="M 5 11 Q 11 7, 16 11 T 27 11" />
-        <path
-          className="ft-thinking-wave ft-thinking-wave--bot"
-          d="M 5 21 Q 11 25, 16 21 T 27 21"
-        />
-      </svg>
-      <AnimatePresence mode="wait">
-        <motion.span
-          key={idx}
-          initial={{ opacity: 0, y: 3 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -3 }}
-          transition={{ duration: 0.25 }}
-          className="italic"
-        >
-          {phrases[idx]} …
-        </motion.span>
-      </AnimatePresence>
+    <div
+      key={tick}
+      data-testid="thinking-tip-line"
+      className="mt-2 max-w-prose text-[12.5px] leading-relaxed text-gray-500 animate-[syflo-fade-in_400ms_ease]"
+    >
+      {line.kind === 'tip' ? (
+        <>
+          <span className="font-semibold text-gray-700">Tip: </span>
+          {line.text}
+        </>
+      ) : (
+        <>
+          "{line.text}"
+          <span className="block mt-0.5 text-[11.5px] opacity-85">— {line.cite}</span>
+        </>
+      )}
     </div>
   );
 }

@@ -60,7 +60,30 @@ but host blocks download), *paywalled* (Lock badge + "View publisher" external l
 Importing attaches the paper's PDF to the current chat. `blockedHosts` logic and its
 tests come along unchanged.
 
-### 5. Web search tool (existing)
+### 5. Chat highlights, "Ask in chat" & parent context (2026-07-19)
+
+Design source of truth: `design/mockup-chat-highlights-ask-in-chat.html` (approved
+2026-07-19).
+
+- **Chat highlights:** the PDF highlight gesture extended to chat messages — select
+  text in any bubble (user or assistant, right pane or parent context), right-click,
+  pick one of the same five colors in the same popup. Anchored by
+  `message_id + start/end character offset` into the message's rendered plain text
+  (reflow-safe, no geometry), stored in `message_highlights`
+  (`/api/chats/:id/message-highlights`), painted via the CSS Custom Highlight API.
+  Right-clicking an existing chat highlight opens the recolor/delete menu.
+- **Ask in chat:** primary popup action on any selection (PDF or chat); "Open as new
+  chat" becomes the secondary action. Drops the selection into the **current** chat's
+  composer as a removable quote block (color bar = picked highlight color, neutral
+  gray when none) — no branch is created. Sending prepends the quote as a markdown
+  blockquote — it lands in the LLM context and renders as a styled quote in the user
+  bubble.
+- **Parent context:** when a branch is active (opened via "Open as new chat") and its
+  tree has **no** PDF, the parent chat renders read-only in the center pane
+  (highlights visible, selections and right-click work there too); the branch keeps
+  the right pane. With a PDF attached, nothing changes.
+
+### 6. Web search tool (existing)
 
 The chat model can call a **web search** tool: a thin backend proxy
 (`POST /api/search`) to a local SearXNG instance (`searxng/`, default
@@ -68,7 +91,7 @@ The chat model can call a **web search** tool: a thin backend proxy
 the model can tell the user. This is unrelated to Paper search (feature 4) — web search
 feeds the conversation, paper search attaches a PDF.
 
-### 6. Desktop packaging (existing)
+### 7. Desktop packaging (existing)
 
 The app ships as a Tauri desktop shell (`src-tauri/`).
 
