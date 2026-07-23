@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
-import { X, Loader2, Eye, EyeOff, Check, ExternalLink, Info, RefreshCw, Palette, Cpu, Download, Trash2, MonitorCog } from 'lucide-react';
+import { X, Loader2, Eye, EyeOff, Check, ExternalLink, Info, RefreshCw, Palette, Cpu, Download, Trash2, MonitorCog, ScrollText } from 'lucide-react';
 import { api } from '../../api';
 import { THEMES, applyTheme, getStoredTheme, type ThemeId } from '../../theme';
 import type { LLMProvider, OllamaModelInfo, Settings, SystemRecommendation } from '../../types';
@@ -24,7 +24,11 @@ function formatSize(bytes?: number): string {
   return gb >= 1 ? `${gb.toFixed(1)} GB` : `${(bytes / 1024 ** 2).toFixed(0)} MB`;
 }
 
-export type SettingsTab = 'appearance' | 'model';
+export type SettingsTab = 'appearance' | 'model' | 'instructions';
+
+// Deckel der Custom instructions — muss mit MAX_CUSTOM_INSTRUCTIONS_CHARS im
+// Backend (routes/settings.js) übereinstimmen.
+const MAX_INSTRUCTIONS_CHARS = 2000;
 
 interface Props {
   open: boolean;
@@ -150,10 +154,18 @@ export function SettingsModal({ open, onClose, onSaved, initialTab = 'appearance
   // wenn wirklich etwas geändert wurde — und um den "Active"-Status oben zu zeigen.
   const [original, setOriginal] = useState<Settings | null>(null);
 
+  // Custom instructions (CONTEXT.md): Freitext + An/Aus-Switch. Expliziter
+  // Save statt Auto-Save — halb getippte Anweisungen dürfen nie in den Prompt
+  // gelangen (und würden per KV-Cache alle Chat-Warm-ups entwerten).
+  const [instructions, setInstructions] = useState('');
+  const [instructionsEnabled, setInstructionsEnabled] = useState(true);
+
   const applySettings = (s: Settings) => {
     setProvider(s.llm_provider);
     setOpenaiModel(s.openai_model);
     setKeySet(s.openai_api_key_set);
+    setInstructions(s.custom_instructions);
+    setInstructionsEnabled(s.custom_instructions_enabled);
     setOriginal(s);
   };
 
@@ -192,6 +204,16 @@ export function SettingsModal({ open, onClose, onSaved, initialTab = 'appearance
   const needsKey = provider === 'openai' && !keyInput && !original?.openai_api_key_set;
   const canActivate = dirty && !needsKey;
 
+  // Eigener Dirty-Stand für den Instructions-Tab — er hat seinen eigenen
+  // Save-Knopf und soll den Model-Activate nicht mit scharf schalten.
+  const instructionsDirty = useMemo(() => {
+    if (!original) return false;
+    return (
+      instructions !== original.custom_instructions ||
+      instructionsEnabled !== original.custom_instructions_enabled
+    );
+  }, [original, instructions, instructionsEnabled]);
+
   // Esc schließt das Modal.
   useEffect(() => {
     if (!open) return;
@@ -227,6 +249,25 @@ export function SettingsModal({ open, onClose, onSaved, initialTab = 'appearance
     }
   };
 
+  const handleSaveInstructions = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await api.updateSettings({
+        custom_instructions: instructions,
+        custom_instructions_enabled: instructionsEnabled,
+      });
+      applySettings(result);
+      setSavedFlash(true);
+      setTimeout(() => setSavedFlash(false), 1500);
+      onSaved?.(result);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save instructions');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleClearKey = async () => {
     setSaving(true);
     setError(null);
@@ -245,6 +286,7 @@ export function SettingsModal({ open, onClose, onSaved, initialTab = 'appearance
   const tabs: { id: SettingsTab; label: string; icon: typeof Palette }[] = [
     { id: 'appearance', label: 'Appearance', icon: Palette },
     { id: 'model', label: 'Model', icon: Cpu },
+    { id: 'instructions', label: 'Instructions', icon: ScrollText },
   ];
 
   return (
@@ -347,6 +389,55 @@ export function SettingsModal({ open, onClose, onSaved, initialTab = 'appearance
                     </div>
                     <p className="mt-2 text-[11px] text-gray-500 leading-relaxed">
                       Themes apply instantly — no activation needed.
+                    </p>
+                  </div>
+                ) : tab === 'instructions' ? (
+                  /* Custom instructions (mockup-settings-reorg.html, Variante A ·
+                     State 4): Freitext + An/Aus-Switch, Save unten im Footer. */
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label
+                        htmlFor="custom-instructions"
+                        className="flex items-center gap-2 text-xs font-semibold text-gray-700 uppercase tracking-wider"
+                      >
+                        <ScrollText size={13} className="text-gray-400 shrink-0" />
+                        Custom instructions
+                      </label>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={instructionsEnabled}
+                        aria-label="Apply custom instructions"
+                        title={instructionsEnabled ? 'Applied to every chat reply' : 'Turned off — the text stays saved'}
+                        onClick={() => setInstructionsEnabled(v => !v)}
+                        className={`relative w-[30px] h-[18px] rounded-full transition-colors shrink-0 ${
+                          instructionsEnabled ? 'bg-blue-600' : 'bg-gray-300'
+                        }`}
+                      >
+                        <span
+                          className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-all ${
+                            instructionsEnabled ? 'left-[14px]' : 'left-0.5'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    <textarea
+                      id="custom-instructions"
+                      value={instructions}
+                      onChange={e => setInstructions(e.target.value)}
+                      maxLength={MAX_INSTRUCTIONS_CHARS}
+                      rows={5}
+                      placeholder="e.g. After every answer, correct the German in my message and list new vocabulary with articles."
+                      className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm leading-relaxed focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-100 transition resize-y"
+                    />
+                    <div className="mt-1 text-[11px] text-gray-400 text-right font-mono">
+                      {instructions.length} / {MAX_INSTRUCTIONS_CHARS}
+                    </div>
+                    <p className="mt-1.5 text-[11px] text-gray-500 leading-relaxed">
+                      Sent with every chat reply in all chat trees; your instructions take
+                      precedence over the built-in style rules. Explain, chat titles and
+                      summaries are not affected. The switch turns them off without deleting
+                      the text.
                     </p>
                   </div>
                 ) : (
@@ -664,6 +755,29 @@ export function SettingsModal({ open, onClose, onSaved, initialTab = 'appearance
               ) : null}
             </div>
           )}
+          {tab === 'instructions' && (
+            <div className="mr-auto text-xs flex items-center gap-1.5">
+              {savedFlash ? (
+                <span className="text-green-700 flex items-center gap-1 font-medium">
+                  <Check size={12} />
+                  Saved
+                </span>
+              ) : instructionsDirty ? (
+                <span className="text-amber-700 font-medium">
+                  Click Save to apply your changes
+                </span>
+              ) : original ? (
+                instructionsEnabled ? (
+                  <span className="text-gray-500 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                    Applied to every chat reply
+                  </span>
+                ) : (
+                  <span className="text-gray-500">Instructions are off</span>
+                )
+              ) : null}
+            </div>
+          )}
           <button
             onClick={onClose}
             disabled={saving}
@@ -671,6 +785,16 @@ export function SettingsModal({ open, onClose, onSaved, initialTab = 'appearance
           >
             Close
           </button>
+          {tab === 'instructions' && (
+            <button
+              onClick={handleSaveInstructions}
+              disabled={saving || loading || !instructionsDirty}
+              title={instructionsDirty ? 'Save and apply these instructions' : 'No changes to save'}
+              className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          )}
           {tab === 'model' && (
             <button
               onClick={handleSave}

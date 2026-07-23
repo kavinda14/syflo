@@ -26,6 +26,8 @@ const ollamaSettings: Settings = {
   ollama_model: 'llama3.2-vision:11b',
   model_source: 'auto',
   openai_api_key_set: false,
+  custom_instructions: '',
+  custom_instructions_enabled: true,
 };
 
 beforeEach(() => {
@@ -138,5 +140,83 @@ describe('SettingsModal – model library (mockup-model-picker.html, Sektion 03)
 
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     expect(screen.getByText(/switched from the chat composer/i)).toBeInTheDocument();
+  });
+});
+
+// ─── Custom instructions (Grill 2026-07-23, Mockup Variante A · State 4) ─────
+// Dritter Tab "Instructions": Freitext + An/Aus-Switch, expliziter Save-Knopf
+// (kein Auto-Save — halb getippte Anweisungen dürfen nie in den Prompt).
+
+describe('SettingsModal – custom instructions (Instructions tab)', () => {
+  const savedSettings: Settings = {
+    ...ollamaSettings,
+    custom_instructions: 'Correct my German after every answer.',
+    custom_instructions_enabled: true,
+  };
+
+  async function openInstructionsTab(settings: Settings = savedSettings) {
+    vi.mocked(api.getSettings).mockResolvedValue(settings);
+    render(<SettingsModal open={true} onClose={vi.fn()} />);
+    await screen.findByText('Theme');
+    fireEvent.click(screen.getByRole('button', { name: /instructions/i }));
+  }
+
+  it('shows the saved text, the switch and a character counter', async () => {
+    await openInstructionsTab();
+
+    const textarea = screen.getByRole('textbox', { name: /custom instructions/i });
+    expect(textarea).toHaveValue('Correct my German after every answer.');
+    expect(screen.getByRole('switch')).toBeChecked();
+    expect(screen.getByText('37 / 2000')).toBeInTheDocument();
+    // Kein Activate hier — der Instructions-Tab hat einen eigenen Save-Knopf.
+    expect(screen.queryByRole('button', { name: /activate/i })).not.toBeInTheDocument();
+  });
+
+  it('keeps Save disabled until text or switch changes', async () => {
+    await openInstructionsTab();
+
+    const save = screen.getByRole('button', { name: /^save$/i });
+    expect(save).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('switch'));
+    expect(save).toBeEnabled();
+  });
+
+  it('saves text and toggle via updateSettings and reports back', async () => {
+    const updated: Settings = {
+      ...savedSettings,
+      custom_instructions: 'Use simple words.',
+      custom_instructions_enabled: false,
+    };
+    vi.mocked(api.updateSettings).mockResolvedValue(updated);
+    const onSaved = vi.fn();
+    vi.mocked(api.getSettings).mockResolvedValue(savedSettings);
+    render(<SettingsModal open={true} onClose={vi.fn()} onSaved={onSaved} />);
+    await screen.findByText('Theme');
+    fireEvent.click(screen.getByRole('button', { name: /instructions/i }));
+
+    fireEvent.change(screen.getByRole('textbox', { name: /custom instructions/i }), {
+      target: { value: 'Use simple words.' },
+    });
+    fireEvent.click(screen.getByRole('switch'));
+    fireEvent.click(screen.getByRole('button', { name: /^save$/i }));
+
+    await waitFor(() =>
+      expect(api.updateSettings).toHaveBeenCalledWith({
+        custom_instructions: 'Use simple words.',
+        custom_instructions_enabled: false,
+      })
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(updated));
+    // Nach dem Speichern ist der Stand wieder sauber — Save deaktiviert sich.
+    expect(screen.getByRole('button', { name: /^save$/i })).toBeDisabled();
+  });
+
+  it('caps the textarea at 2000 characters', async () => {
+    await openInstructionsTab();
+
+    expect(
+      screen.getByRole('textbox', { name: /custom instructions/i })
+    ).toHaveAttribute('maxlength', '2000');
   });
 });

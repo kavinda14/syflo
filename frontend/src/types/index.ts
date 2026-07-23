@@ -300,6 +300,10 @@ export interface Settings {
   // 'manual': der Nutzer hat selbst gewählt — Automatik bleibt weg.
   model_source: 'auto' | 'manual';
   openai_api_key_set: boolean;
+  // Custom instructions (CONTEXT.md): Nutzer-Freitext für jeden Chat-System-
+  // Prompt; abschaltbar, ohne dass der Text verloren geht. Max. 2000 Zeichen.
+  custom_instructions: string;
+  custom_instructions_enabled: boolean;
 }
 
 // Ein lokal installiertes Ollama-Modell, wie es der (vision-gefilterte)
@@ -332,4 +336,6 @@ export interface SettingsUpdate {
   openai_api_key?: string;
   openai_model?: string;
   ollama_model?: string;
+  custom_instructions?: string;
+  custom_instructions_enabled?: boolean;
 }
