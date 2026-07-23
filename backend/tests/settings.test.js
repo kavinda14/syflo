@@ -46,8 +46,11 @@ describe('GET /api/settings', () => {
     expect(res.body).toEqual({
       llm_provider: 'ollama',
       openai_model: 'gpt-4o-mini',
-      ollama_model: 'llama3.2-vision:11b',
+      ollama_model: 'qwen3.5:9b',
+      model_source: 'auto',
       openai_api_key_set: false,
+      custom_instructions: '',
+      custom_instructions_enabled: true,
     });
   });
 
@@ -81,11 +84,53 @@ describe('PUT /api/settings', () => {
   });
 });
 
+// ─── Custom instructions (Grill 2026-07-23) ─────────────────────────────────
+// Vom Nutzer verfasster Freitext, der jedem Chat-System-Prompt mitgegeben
+// wird. Global, abschaltbar ohne Textverlust, max. 2000 Zeichen.
+
+describe('custom instructions', () => {
+  it('saves the text and returns it on GET', async () => {
+    const res = await request(app).put('/api/settings').send({
+      custom_instructions: 'Correct my German after every answer.',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.custom_instructions).toBe('Correct my German after every answer.');
+
+    const get = await request(app).get('/api/settings');
+    expect(get.body.custom_instructions).toBe('Correct my German after every answer.');
+  });
+
+  it('turns instructions off without deleting the text', async () => {
+    await request(app).put('/api/settings').send({ custom_instructions: 'Use analogies.' });
+    const res = await request(app).put('/api/settings').send({ custom_instructions_enabled: false });
+
+    expect(res.body.custom_instructions_enabled).toBe(false);
+    expect(res.body.custom_instructions).toBe('Use analogies.');
+  });
+
+  it('rejects text longer than 2000 characters', async () => {
+    const res = await request(app).put('/api/settings').send({
+      custom_instructions: 'x'.repeat(2001),
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/2000/);
+
+    // Der zu lange Text wurde nicht gespeichert.
+    const get = await request(app).get('/api/settings');
+    expect(get.body.custom_instructions).toBe('');
+  });
+
+  it('rejects non-string instructions and non-boolean toggles', async () => {
+    expect((await request(app).put('/api/settings').send({ custom_instructions: 42 })).status).toBe(400);
+    expect((await request(app).put('/api/settings').send({ custom_instructions_enabled: 'yes' })).status).toBe(400);
+  });
+});
+
 describe('getLLMClient – provider switching', () => {
   it('returns an Ollama-pointed client by default', () => {
     const { client, model, provider } = getLLMClient(db);
     expect(provider).toBe('ollama');
-    expect(model).toBe('llama3.2-vision:11b');
+    expect(model).toBe('qwen3.5:9b');
     expect(client._opts.baseURL).toBe('http://localhost:11434/v1');
   });
 
@@ -150,24 +195,45 @@ describe('GET /api/settings/ollama-models', () => {
   const realFetch = global.fetch;
   afterEach(() => { global.fetch = realFetch; });
 
-  it('returns the list of locally installed models when Ollama responds', async () => {
-    global.fetch = jest.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        models: [
-          { name: 'llama3.2-vision:11b', size: 7816589186, details: { parameter_size: '10.7B' } },
-          { name: 'phi4:latest', size: 9053116391, details: { parameter_size: '14.7B' } },
-        ],
-      }),
+  // Fake Ollama daemon: /api/tags lists pulled models, /api/show answers
+  // per-model capabilities — exactly the two endpoints the route talks to.
+  function mockOllama(tags, capsByModel) {
+    global.fetch = jest.fn(async (url, opts) => {
+      if (String(url).endsWith('/api/tags')) {
+        return { ok: true, json: async () => ({ models: tags }) };
+      }
+      if (String(url).endsWith('/api/show')) {
+        const { model } = JSON.parse(opts.body);
+        return { ok: true, json: async () => ({ capabilities: capsByModel[model] || [] }) };
+      }
+      throw new Error(`unexpected fetch: ${url}`);
     });
+  }
+
+  it('lists only vision-capable models, flagging which can think', async () => {
+    mockOllama(
+      [
+        { name: 'qwen3.5:9b', size: 6600000000, details: { parameter_size: '9B' } },
+        { name: 'llama3.2-vision:11b', size: 7816589186, details: { parameter_size: '10.7B' } },
+        { name: 'phi4:latest', size: 9053116391, details: { parameter_size: '14.7B' } },
+      ],
+      {
+        'qwen3.5:9b': ['completion', 'vision', 'tools', 'thinking'],
+        'llama3.2-vision:11b': ['completion', 'vision'],
+        'phi4:latest': ['completion'],
+      }
+    );
 
     const res = await request(app).get('/api/settings/ollama-models');
+
     expect(res.status).toBe(200);
-    expect(res.body.models).toHaveLength(2);
+    expect(res.body.models.map((m) => m.name)).toEqual(['qwen3.5:9b', 'llama3.2-vision:11b']);
     expect(res.body.models[0]).toMatchObject({
-      name: 'llama3.2-vision:11b',
-      parameter_size: '10.7B',
+      name: 'qwen3.5:9b',
+      parameter_size: '9B',
+      canThink: true,
     });
+    expect(res.body.models[1].canThink).toBe(false);
   });
 
   it('returns 503 with a helpful message when Ollama is unreachable', async () => {
@@ -175,5 +241,128 @@ describe('GET /api/settings/ollama-models', () => {
     const res = await request(app).get('/api/settings/ollama-models');
     expect(res.status).toBe(503);
     expect(res.body.error).toMatch(/ollama/i);
+  });
+});
+
+describe('POST /api/settings/apply-recommended', () => {
+  const GB = 1024 * 1024 * 1024;
+  const realFetch = global.fetch;
+  afterEach(() => { global.fetch = realFetch; });
+
+  function appOn24GbMac() {
+    return createApp(db, {
+      system: { totalmem: () => 24 * GB, platform: () => 'darwin' },
+    });
+  }
+
+  function mockInstalled(names) {
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      json: async () => ({ models: names.map((name) => ({ name })) }),
+    }));
+  }
+
+  it('switches to the recommended model once it is installed (source auto)', async () => {
+    const { setSetting } = require('../llm');
+    // Bestand aus der Zeit vor der Leiter — Quelle ist noch 'auto'.
+    setSetting(db, 'ollama_model', 'llama3.2-vision:11b');
+    mockInstalled(['llama3.2-vision:11b', 'qwen3.5:9b']);
+    const app = appOn24GbMac();
+
+    const res = await request(app).post('/api/settings/apply-recommended');
+
+    expect(res.body).toMatchObject({ applied: true, model: 'qwen3.5:9b' });
+    const settings = await request(app).get('/api/settings');
+    expect(settings.body.ollama_model).toBe('qwen3.5:9b');
+    expect(settings.body.model_source).toBe('auto');
+  });
+
+  it('never overrides a manual choice', async () => {
+    const app = appOn24GbMac();
+    await request(app).put('/api/settings').send({ ollama_model: 'qwen3.5:4b' });
+    mockInstalled(['qwen3.5:4b', 'qwen3.5:9b']);
+
+    const res = await request(app).post('/api/settings/apply-recommended');
+
+    expect(res.body.applied).toBe(false);
+    const settings = await request(app).get('/api/settings');
+    expect(settings.body.ollama_model).toBe('qwen3.5:4b');
+  });
+
+  it('does not activate a model that is not downloaded yet', async () => {
+    const { setSetting } = require('../llm');
+    setSetting(db, 'ollama_model', 'llama3.2-vision:11b');
+    mockInstalled(['llama3.2-vision:11b']);
+    const app = appOn24GbMac();
+
+    const res = await request(app).post('/api/settings/apply-recommended');
+
+    expect(res.body).toMatchObject({ applied: false, model: 'qwen3.5:9b' });
+    const settings = await request(app).get('/api/settings');
+    expect(settings.body.ollama_model).toBe('llama3.2-vision:11b');
+  });
+});
+
+describe('model library: pull & remove', () => {
+  const realFetch = global.fetch;
+  afterEach(() => { global.fetch = realFetch; });
+
+  it('streams download progress while pulling a model', async () => {
+    const progress = [
+      { status: 'pulling manifest' },
+      { status: 'pulling abc', total: 100, completed: 42 },
+      { status: 'success' },
+    ];
+    global.fetch = jest.fn(async (url) => {
+      if (!String(url).endsWith('/api/pull')) throw new Error(`unexpected fetch: ${url}`);
+      return {
+        ok: true,
+        body: (async function* () {
+          for (const p of progress) yield Buffer.from(JSON.stringify(p) + '\n');
+        })(),
+      };
+    });
+
+    const res = await request(app)
+      .post('/api/settings/ollama-pull')
+      .send({ model: 'qwen3.5:9b' })
+      .buffer(true);
+
+    expect(res.status).toBe(200);
+    const body = JSON.parse(`[${res.text.trim().split('\n').join(',')}]`);
+    expect(body).toEqual(progress);
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).model).toBe('qwen3.5:9b');
+  });
+
+  it('rejects a pull without a model name', async () => {
+    const res = await request(app).post('/api/settings/ollama-pull').send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('removes an installed model', async () => {
+    global.fetch = jest.fn(async (url) => {
+      if (!String(url).endsWith('/api/delete')) throw new Error(`unexpected fetch: ${url}`);
+      return { ok: true, json: async () => ({}) };
+    });
+
+    const res = await request(app).delete(`/api/settings/ollama-models/${encodeURIComponent('qwen3.5:9b')}`);
+
+    expect(res.status).toBe(200);
+    expect(JSON.parse(global.fetch.mock.calls[0][1].body).model).toBe('qwen3.5:9b');
+  });
+});
+
+describe('model source: auto vs. manual', () => {
+  it('starts as auto — the machine recommendation may set the model', async () => {
+    const res = await request(app).get('/api/settings');
+    expect(res.body.model_source).toBe('auto');
+  });
+
+  it('choosing a model by hand flips the source to manual', async () => {
+    await request(app).put('/api/settings').send({ ollama_model: 'qwen3.5:4b' });
+
+    const res = await request(app).get('/api/settings');
+    expect(res.body.model_source).toBe('manual');
+    expect(res.body.ollama_model).toBe('qwen3.5:4b');
   });
 });

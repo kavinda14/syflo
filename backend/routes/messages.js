@@ -15,9 +15,16 @@ const express = require('express');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const { getLLMClient } = require('../llm');
-const { streamWithTools } = require('../tools');
+const { getLLMClient, getSetting, noThinkExtras, extendOllamaKeepAlive, getOllamaGpuResidency } = require('../llm');
+const { streamWithTools, ALL_TOOLS } = require('../tools');
 const { getTreePaperContext } = require('../pdf-text');
+const {
+  buildAncestorContext,
+  renderAncestorText,
+  applyContextBudget,
+  MAX_SYSTEM_CONTEXT_CHARS,
+  CONTEXT_WINDOW_TOKENS,
+} = require('../ancestor-context');
 
 const MAX_TEXT_FILE_BYTES = 64 * 1024;
 
@@ -102,6 +109,168 @@ module.exports = (db, UPLOADS_DIR, options = {}) => {
     return parts.join('');
   }
 
+  // Baut den textuellen Gesprächskontext eines Chats: System-Prompt (inkl.
+  // Paper-Volltext bei gebundenem PDF, ADR-0002, und geerbtem Vorfahren-
+  // Kontext bei Branches) plus die Nachrichten-Historie. Wird von der echten
+  // Nachricht (dropLastMessage: die aktuelle User-Nachricht kommt multimodal
+  // dazu) UND vom Prefix-Warm-up (kompletter Stand) verwendet — beide müssen
+  // denselben Prompt-Prefix erzeugen, sonst greift Ollamas KV-Cache nicht.
+  async function buildSystemAndHistory(chat, { dropLastMessage }) {
+    const contextMessages = [];
+    // Regel (5) ist eine Latenz-Maßnahme: auf lokaler Hardware kostet jedes
+    // generierte Token ~40 ms — eine 950-Token-Antwort allein ~40 s. Kürze
+    // als Default macht Antworten spürbar schneller fertig.
+    let systemBase = 'You are a friendly and helpful assistant. Formatting rules: (1) Use proper Markdown for headings — always include a SPACE between the hash characters and the heading text: `# Heading`, `## Subheading`, `### Sub-subheading`. Never write `#Heading` without a space — it will not render as a heading. (2) Do NOT use emojis. Keep prose plain so it reads cleanly. (3) When explaining concepts, always use analogies and real-world comparisons to make things easy to understand. (4) When the user attaches images, examine them carefully and describe what you see when relevant. (5) Be concise by default: answer in a few short paragraphs at most, and expand only when the user explicitly asks for more depth or detail. (6) When the user asks about current or real-time information (news, weather, prices, recent events) or explicitly asks you to search the web, ALWAYS call the web_search tool first and base your answer on its results — never invent real-time information from memory, and never claim the tool is unavailable without having called it. (7) ALWAYS reply in the language of the user\'s most recent message — German message, German reply; English message, English reply. If a message mixes languages, reply in its dominant language.';
+
+    // Custom instructions (CONTEXT.md): Nutzer-Freitext aus den Settings —
+    // direkt nach den Basisregeln und VOR Paper-/Ancestor-Kontext, damit sie
+    // das Budget-Trimming nie erfasst. Die explizite Vorrang-Zeile ist nötig,
+    // weil kleine lokale Modelle Regel-Konflikte sonst unvorhersehbar lösen.
+    const customInstructions = getSetting(db, 'custom_instructions');
+    if (getSetting(db, 'custom_instructions_enabled') === 'true' && customInstructions.trim()) {
+      systemBase +=
+        '\n\nThe user has set the following custom instructions. Follow them; they take precedence over the style rules above.\n' +
+        '--- CUSTOM INSTRUCTIONS START ---\n' +
+        customInstructions +
+        '\n--- CUSTOM INSTRUCTIONS END ---';
+    }
+
+    // Volltext des an den Chat-Tree gebundenen Papers (ADR-0002) in den
+    // System-Prompt — ohne ihn kennt das Modell das PDF nicht und halluziniert
+    // Zusammenfassungen. Extraktion ist lazy und in papers.extracted_text
+    // gecacht; Fehler degradieren still zu "kein Paper-Kontext".
+    const paperContext = await getTreePaperContext(db, chat.id, extractPdfTextFn);
+
+    // Geerbter Gesprächskontext (Design 2026-07-20): ganzer Pfad bis zur
+    // Wurzel — Eltern wörtlich, Großeltern+ als gecachte Summary, dazu die
+    // parent_word-Kette. Summary-Fehler degradieren still zum Kontext ohne
+    // die betroffene Summary; der Lazy-Pfad hier ist das Sicherheitsnetz
+    // hinter dem Warm-up bei der Branch-Erstellung.
+    let ancestor = null;
+    if (chat.parent_id) {
+      try {
+        ancestor = await buildAncestorContext(db, chat.id);
+      } catch (_) { /* ohne Ancestor-Kontext weitermachen */ }
+    }
+
+    // Opfer-Reihenfolge, wenn alles zusammen zu groß wird:
+    // Paper → Vorfahren-Summaries (älteste zuerst) → nie das Eltern-Transkript.
+    const fitted = applyContextBudget(
+      {
+        paperText: paperContext ? paperContext.text : null,
+        summaries: ancestor ? ancestor.summaries : [],
+        parentTranscript: ancestor ? ancestor.parentTranscript : null,
+      },
+      MAX_SYSTEM_CONTEXT_CHARS
+    );
+
+    if (paperContext && fitted.paperText) {
+      systemBase +=
+        `\n\nA research paper is attached to this conversation: "${paperContext.title}". ` +
+        'Its full text is included below. Base every answer about the paper on this text; ' +
+        'if something is not covered by it, say so instead of guessing.\n' +
+        '--- PAPER TEXT START ---\n' +
+        fitted.paperText +
+        '\n--- PAPER TEXT END ---';
+    }
+
+    if (ancestor) {
+      const ancestorText = renderAncestorText({
+        chain: ancestor.chain,
+        summaries: fitted.summaries,
+        parentTranscript: fitted.parentTranscript,
+      });
+      contextMessages.push({
+        role: 'system',
+        content: `${systemBase} The user is exploring the term "${chat.parent_word}" from a previous conversation. Context:\n\n${ancestorText}`,
+      });
+    } else {
+      contextMessages.push({ role: 'system', content: systemBase });
+    }
+
+    // Historie (nur Text — alte Anhänge werden im Kontext nicht erneut hochgeschickt,
+    // sonst wird der Prompt zu groß)
+    const history = db.prepare(
+      'SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at ASC'
+    ).all(chat.id);
+    const included = dropLastMessage ? history.slice(0, -1) : history;
+    included.forEach(m => contextMessages.push({ role: m.role, content: m.content }));
+
+    return contextMessages;
+  }
+
+  // Der eine laufende Warm-up (mehr als einen gibt es nie sinnvoll). Ein
+  // Warm-up ist reine Vorleistung — er darf NIE eine echte Anfrage blockieren.
+  // Auf Ollamas begrenzten Slots hieße das sonst: der Nutzer wartet bis zu
+  // ~40 s (Paper-Prefill) in der Warteschlange, bevor seine Frage überhaupt
+  // anläuft (gemessen 2026-07-21). Deshalb: neue echte Nachricht ODER neuer
+  // Warm-up → laufenden Warm-up sofort abbrechen. Der bereits verarbeitete
+  // Prefix bleibt in Ollamas Cache erhalten — abgebrochene Vorarbeit ist
+  // also nicht verloren.
+  let activeWarmup = null;
+  function abortActiveWarmup() {
+    if (activeWarmup) activeWarmup.abort();
+    activeWarmup = null;
+  }
+
+  // POST /api/chats/:chatId/messages/warmup — Prefix-Warm-up: liest den
+  // kompletten Chat-Kontext (v. a. den Paper-Volltext) einmal mit einem
+  // 1-Token-Aufruf ein, damit Ollamas KV-Cache warm ist, bevor der Nutzer
+  // seine Frage abschickt — und pinnt das Modell für 1 h in den Speicher.
+  // Fire-and-forget vom Frontend beim Öffnen eines Chats; Fehler sind nie
+  // fatal (warmed:false statt 5xx).
+  router.post('/warmup', async (req, res) => {
+    const chat = db.prepare('SELECT * FROM chats WHERE id = ?').get(req.params.chatId);
+    if (!chat) return res.status(404).json({ error: 'Chat not found' });
+
+    abortActiveWarmup();
+    const warmupAbort = new AbortController();
+    activeWarmup = warmupAbort;
+
+    try {
+      const { client, model, provider } = getLLMClient(db);
+      if (provider !== 'ollama') {
+        return res.json({ warmed: false, reason: 'local models only' });
+      }
+      const contextMessages = await buildSystemAndHistory(chat, { dropLastMessage: false });
+      try {
+        await client.chat.completions.create({
+          model,
+          messages: contextMessages,
+          // Gleiche Tools wie die echte Anfrage — sonst weicht der Prompt-
+          // Prefix ab und der Cache greift nicht.
+          tools: ALL_TOOLS,
+          ...noThinkExtras(provider),
+          max_tokens: 1,
+        }, { signal: warmupAbort.signal });
+      } catch (err) {
+        if (!/does not support tools/i.test(err?.message || '')) throw err;
+        await client.chat.completions.create({
+          model,
+          messages: contextMessages,
+          ...noThinkExtras(provider),
+          max_tokens: 1,
+        }, { signal: warmupAbort.signal });
+      }
+      await extendOllamaKeepAlive(model);
+      // GPU-Residency-Check: liegt das Modell nur teilweise im VRAM, ist
+      // jede Antwort 10–20× langsamer — das Frontend zeigt dann eine Warnung.
+      const gpu = await getOllamaGpuResidency(model);
+      if (gpu && gpu.vramPercent < 100) {
+        console.warn(
+          `[perf] ${model} liegt nur zu ${gpu.vramPercent}% im GPU-Speicher — ` +
+          'teilweises CPU-Offloading macht Antworten 10-20x langsamer. ' +
+          'Kleineres Modell wählen oder Speicher freigeben.'
+        );
+      }
+      res.json({ warmed: true, ...(gpu ? { gpu } : {}) });
+    } catch (err) {
+      res.json({ warmed: false, reason: err.message });
+    } finally {
+      if (activeWarmup === warmupAbort) activeWarmup = null;
+    }
+  });
+
   // POST /api/chats/:chatId/messages
   // Akzeptiert sowohl JSON (alte Clients) als auch multipart/form-data (mit Dateien).
   // Multipart-Felder: text, aliases (JSON-Array), files (Datei-Inputs)
@@ -141,45 +310,9 @@ module.exports = (db, UPLOADS_DIR, options = {}) => {
       }
     }
 
-    // Kontext aufbauen — System-Prompt + Paper-Volltext (falls das Tree ein
-    // PDF hat) + Eltern-Chat (falls Branch) + Historie
-    const contextMessages = [];
-    let systemBase = 'You are a friendly and helpful assistant. Formatting rules: (1) Use proper Markdown for headings — always include a SPACE between the hash characters and the heading text: `# Heading`, `## Subheading`, `### Sub-subheading`. Never write `#Heading` without a space — it will not render as a heading. (2) Do NOT use emojis. Keep prose plain so it reads cleanly. (3) When explaining concepts, always use analogies and real-world comparisons to make things easy to understand. (4) When the user attaches images, examine them carefully and describe what you see when relevant.';
-
-    // Volltext des an den Chat-Tree gebundenen Papers (ADR-0002) in den
-    // System-Prompt — ohne ihn kennt das Modell das PDF nicht und halluziniert
-    // Zusammenfassungen. Extraktion ist lazy und in papers.extracted_text
-    // gecacht; Fehler degradieren still zu "kein Paper-Kontext".
-    const paperContext = await getTreePaperContext(db, req.params.chatId, extractPdfTextFn);
-    if (paperContext) {
-      systemBase +=
-        `\n\nA research paper is attached to this conversation: "${paperContext.title}". ` +
-        'Its full text is included below. Base every answer about the paper on this text; ' +
-        'if something is not covered by it, say so instead of guessing.\n' +
-        '--- PAPER TEXT START ---\n' +
-        paperContext.text +
-        '\n--- PAPER TEXT END ---';
-    }
-
-    if (chat.parent_id) {
-      const parentMessages = db.prepare(
-        'SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at ASC'
-      ).all(chat.parent_id);
-      contextMessages.push({
-        role: 'system',
-        content: `${systemBase} The user is exploring the term "${chat.parent_word}" from a previous conversation. Context:\n\n${parentMessages.map(m => `${m.role}: ${m.content}`).join('\n')}`,
-      });
-    } else {
-      contextMessages.push({ role: 'system', content: systemBase });
-    }
-
-    // Historie (nur Text — alte Anhänge werden im Kontext nicht erneut hochgeschickt,
-    // sonst wird der Prompt zu groß)
-    const history = db.prepare(
-      'SELECT role, content FROM messages WHERE chat_id = ? ORDER BY created_at ASC'
-    ).all(req.params.chatId);
-    // Letzte (aktuelle) User-Nachricht weglassen — die fügen wir multimodal hinzu
-    history.slice(0, -1).forEach(m => contextMessages.push({ role: m.role, content: m.content }));
+    // Kontext aufbauen — System-Prompt (+ Paper + Vorfahren) + Historie.
+    // Letzte (aktuelle) User-Nachricht weglassen — die fügen wir multimodal hinzu.
+    const contextMessages = await buildSystemAndHistory(chat, { dropLastMessage: true });
 
     // Aktuelle User-Nachricht: multimodal mit Bildern + Text-Annex für andere Dateien
     const imageContents = attachments.map(attachmentToMultimodalContent).filter(Boolean);
@@ -199,8 +332,26 @@ module.exports = (db, UPLOADS_DIR, options = {}) => {
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
 
+    // Echte Fragen haben Vorfahrt: einen eventuell laufenden Warm-up sofort
+    // abbrechen, damit diese Anfrage nicht hinter ihm in Ollamas
+    // Warteschlange hängt.
+    abortActiveWarmup();
+
     try {
-      const { client, model } = getLLMClient(db);
+      const { client, model, provider } = getLLMClient(db);
+
+      // Denken ist standardmäßig AUS (Antworten starten sofort). Nur wenn der
+      // Client explizit think=true schickt, darf das Modell seine Gedanken-
+      // kette laufen lassen. Ollama /v1 übersetzt reasoning_effort 'none'
+      // in think=false; die Gedanken streamen als eigene reasoning-Events
+      // an die UI (einklappbares Panel), aber nie in Antwort-Text oder DB.
+      const thinkOn = String(req.body.think) === 'true';
+      const extras = thinkOn ? {} : noThinkExtras(provider);
+
+      // Stop-Button: Wenn der Client die Verbindung schließt, brechen wir die
+      // Upstream-Anfrage ab — Ollama/OpenAI hören sofort auf zu generieren.
+      const upstreamAbort = new AbortController();
+      req.on('close', () => upstreamAbort.abort());
 
       // Tool-Use-Loop: das LLM darf eigenständig web_search aufrufen. Beim
       // Tool-Call streamen wir spezielle SSE-Events ans Frontend, damit es
@@ -210,26 +361,67 @@ module.exports = (db, UPLOADS_DIR, options = {}) => {
         client,
         model,
         messages: contextMessages,
+        extras,
+        signal: upstreamAbort.signal,
         onText: (delta) => {
           res.write(`data: ${JSON.stringify({ delta })}\n\n`);
         },
         onToolEvent: (evt) => {
           res.write(`data: ${JSON.stringify({ tool: evt })}\n\n`);
         },
+        onThinking: () => {
+          res.write(`data: ${JSON.stringify({ thinking: true })}\n\n`);
+        },
+        onReasoning: (delta) => {
+          res.write(`data: ${JSON.stringify({ reasoning: delta })}\n\n`);
+        },
+        onPerf: (perf) => {
+          // Eine [perf]-Zeile pro Antwort: die Basis für jede Latenz-Diagnose
+          // (Prefill vs. Decode) und für scripts/benchmark.js.
+          console.log(
+            `[perf] model=${model} prompt_tokens=${perf.promptTokens ?? '?'} ` +
+            `ttft_ms=${perf.ttftMs ?? '?'} gen_tokens=${perf.completionTokens ?? '?'} ` +
+            `tok_s=${perf.tokensPerSecond ?? '?'} total_ms=${perf.totalMs}`
+          );
+          // Prompt nahe am Kontextfenster heißt Context-Shifting: Ollama
+          // wirft vorne Tokens weg, der Prefix ändert sich bei jeder Anfrage
+          // und der KV-Cache greift nie — genau das soll das abgeleitete
+          // Zeichen-Budget verhindern. Diese Warnung ist das Sicherheitsnetz.
+          if (provider === 'ollama' && perf.promptTokens && perf.promptTokens > CONTEXT_WINDOW_TOKENS * 0.9) {
+            console.warn(
+              `[perf] Prompt (${perf.promptTokens} Tokens) ist nahe am Kontextfenster ` +
+              `(${CONTEXT_WINDOW_TOKENS}) — Context-Shifting droht, KV-Cache wird unwirksam.`
+            );
+          }
+          res.write(`data: ${JSON.stringify({ perf })}\n\n`);
+        },
       });
+
+      // Nach jeder Antwort die Modell-TTL wieder auf 1 h ziehen — sonst fällt
+      // sie auf Ollamas 5-Minuten-Default zurück und der Paper-Cache stirbt.
+      if (provider === 'ollama') extendOllamaKeepAlive(model);
+
+      // Stop-Button (Nutzerentscheid 2026-07-22): die halb generierte Antwort
+      // wird NICHT gespeichert — an ihrer Stelle steht nur der Marker, den
+      // das Frontend als graue "Interrupted"-Zeile rendert (gleicher String
+      // wie INTERRUPTED_MARKER in frontend/src/types).
+      const aborted = upstreamAbort.signal.aborted;
+      const assistantContent = aborted ? '*Interrupted*' : fullContent;
 
       const assistantMsgId = crypto.randomUUID();
       const assistantNow = new Date().toISOString();
       db.prepare(
         'INSERT INTO messages (id, chat_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)'
-      ).run(assistantMsgId, req.params.chatId, 'assistant', fullContent, assistantNow);
+      ).run(assistantMsgId, req.params.chatId, 'assistant', assistantContent, assistantNow);
 
-      // Titel-Generierung wie bisher
+      // Titel-Generierung wie bisher — nach einem Abbruch überspringen (der
+      // Client ist weg, und ein weiterer LLM-Aufruf wäre nur Wartezeit für
+      // die nächste echte Frage).
       const msgCount = db.prepare(
         'SELECT COUNT(*) as count FROM messages WHERE chat_id = ?'
       ).get(req.params.chatId);
 
-      if (chat.title === 'New Chat' || msgCount.count <= 2) {
+      if (!aborted && (chat.title === 'New Chat' || msgCount.count <= 2)) {
         // Hard caps so the sidebar list and mindmap stay readable even if the
         // LLM ignores the word-limit instruction (some smaller models do).
         const MAX_TITLE_WORDS = 4;
@@ -243,20 +435,44 @@ module.exports = (db, UPLOADS_DIR, options = {}) => {
           .join(' ');
 
         try {
-          const { client: titleClient, model: titleModel } = getLLMClient(db);
-          const titleCompletion = await titleClient.chat.completions.create({
-            model: titleModel,
-            messages: [
-              {
-                role: 'system',
-                content:
-                  'Generate a 2 to 4 word title for this chat. ' +
-                  'Output ONLY the title — no quotes, no punctuation, no markdown, no labels, no extra commentary. ' +
-                  'Examples: React hooks tutorial / Bicycle repair guide / Berlin trip planning / Linear algebra basics.',
-              },
-              { role: 'user', content: content || 'New chat' },
-            ],
-          });
+          const { client: titleClient, model: titleModel, provider: titleProvider } = getLLMClient(db);
+          const titleInstruction = {
+            role: 'user',
+            content:
+              'Generate a 2 to 4 word title for this chat. ' +
+              'Write the title in the language of the conversation (a German chat gets a German title). ' +
+              'Output ONLY the title — no quotes, no punctuation, no markdown, no labels, no extra commentary. ' +
+              'Examples: React hooks tutorial / Bicycle repair guide / Berlin trip planning / Linear algebra basics.',
+          };
+          // Ollama hat genau EINEN KV-Cache-Slot (Vision-Modelle erzwingen
+          // Parallel:1). Ein Standalone-Titel-Prompt würde den teuren
+          // Paper-Prefix verdrängen — die nächste Frage zahlt dann den
+          // vollen Prefill erneut (~40 s gemessen, 2026-07-21). Deshalb:
+          // dieselbe Prompt-Basis wie das Gespräch (inkl. tools, sonst
+          // weicht der gerenderte Prefix ab) + Titel-Frage hinten dran —
+          // Cache-Treffer statt Verdrängung. Cloud-Provider behalten den
+          // billigen Mini-Prompt (dort zählt jedes Input-Token, nicht der
+          // lokale Cache).
+          const titleMessages = titleProvider === 'ollama'
+            ? [...contextMessages, { role: 'assistant', content: fullContent }, titleInstruction]
+            : [titleInstruction, { role: 'user', content: content || 'New chat' }];
+          let titleCompletion;
+          try {
+            titleCompletion = await titleClient.chat.completions.create({
+              model: titleModel,
+              // Für einen 4-Wort-Titel darf kein Denk-Modell minutenlang grübeln.
+              ...noThinkExtras(titleProvider),
+              messages: titleMessages,
+              ...(titleProvider === 'ollama' ? { tools: ALL_TOOLS } : {}),
+            });
+          } catch (err) {
+            if (!/does not support tools/i.test(err?.message || '')) throw err;
+            titleCompletion = await titleClient.chat.completions.create({
+              model: titleModel,
+              ...noThinkExtras(titleProvider),
+              messages: titleMessages,
+            });
+          }
           const raw = titleCompletion.choices[0]?.message?.content || '';
           if (raw.trim()) newTitle = raw.trim();
         } catch (_) { /* Fallback genügt */ }
@@ -290,7 +506,7 @@ module.exports = (db, UPLOADS_DIR, options = {}) => {
         attachments: userAttachments,
       };
       const assistantMessage = {
-        id: assistantMsgId, chat_id: req.params.chatId, role: 'assistant', content: fullContent, created_at: assistantNow,
+        id: assistantMsgId, chat_id: req.params.chatId, role: 'assistant', content: assistantContent, created_at: assistantNow,
         attachments: [],
       };
 

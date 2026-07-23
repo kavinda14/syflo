@@ -18,7 +18,17 @@ const DEFAULTS = {
   llm_provider: 'ollama',
   openai_api_key: '',
   openai_model: 'gpt-4o-mini',
-  ollama_model: 'llama3.2-vision:11b',
+  // Statischer Fallback = mittlere Sprosse der Empfehlungs-Leiter; die echte
+  // Hardware-Empfehlung setzt das Modell, solange model_source 'auto' ist.
+  ollama_model: 'qwen3.5:9b',
+  // 'auto': die Maschinen-Empfehlung darf das Modell setzen.
+  // 'manual': der Nutzer hat selbst gewählt — Automatik fasst nichts mehr an.
+  model_source: 'auto',
+  // Custom instructions (CONTEXT.md): Freitext des Nutzers, der jedem
+  // Chat-System-Prompt mitgegeben wird. Der Schalter liegt als
+  // 'true'/'false'-String in der TEXT-Spalte der settings-Tabelle.
+  custom_instructions: '',
+  custom_instructions_enabled: 'true',
 };
 
 function getSetting(db, key) {
@@ -39,6 +49,9 @@ function getAllSettings(db) {
     openai_api_key: getSetting(db, 'openai_api_key'),
     openai_model: getSetting(db, 'openai_model'),
     ollama_model: getSetting(db, 'ollama_model'),
+    model_source: getSetting(db, 'model_source'),
+    custom_instructions: getSetting(db, 'custom_instructions'),
+    custom_instructions_enabled: getSetting(db, 'custom_instructions_enabled'),
   };
 }
 
@@ -92,4 +105,53 @@ async function testOpenAIKey(apiKey) {
   }
 }
 
-module.exports = { getLLMClient, getSetting, setSetting, getAllSettings, testOpenAIKey, DEFAULTS };
+/**
+ * Extra-Parameter für LLM-Aufrufe, die sofort antworten müssen (Definitionen,
+ * Titel, Summaries): unterdrückt bei Ollama die Denk-Phase von Reasoning-
+ * Modellen (/v1 übersetzt reasoning_effort 'none' → think off).
+ */
+function noThinkExtras(provider) {
+  return provider === 'ollama' ? { reasoning_effort: 'none' } : {};
+}
+
+/**
+ * Hält das Ollama-Modell (und damit den KV-Prefix-Cache mit dem eingelesenen
+ * Paper) 1 h im Speicher. Der OpenAI-kompatible Endpoint ignoriert keep_alive
+ * — nur die native API setzt die TTL; ein leerer Prompt lädt ohne zu
+ * generieren (done_reason 'load'). Fehler sind nie fatal.
+ */
+async function extendOllamaKeepAlive(model) {
+  try {
+    await fetch('http://localhost:11434/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt: '', keep_alive: '1h' }),
+    });
+  } catch { /* Ollama nicht erreichbar — TTL bleibt einfach beim Default */ }
+}
+
+/**
+ * Wie viel des geladenen Modells im GPU-Speicher liegt (native /api/ps:
+ * size_vram vs. size). Teilweises CPU-Offloading (unter 100 %) ist der
+ * häufigste Grund für unerklärlich langsame lokale Antworten — 10–20×
+ * langsamer als vollständig auf der GPU. null, wenn das Modell (noch) nicht
+ * geladen oder Ollama nicht erreichbar ist; Fehler sind nie fatal.
+ */
+async function getOllamaGpuResidency(model) {
+  try {
+    const r = await fetch('http://localhost:11434/api/ps');
+    if (!r.ok) return null;
+    const data = await r.json();
+    const loaded = (data.models || []).find(m => m.name === model || m.model === model);
+    if (!loaded || !loaded.size) return null;
+    return {
+      vramPercent: Math.round(((loaded.size_vram || 0) / loaded.size) * 100),
+      sizeBytes: loaded.size,
+      vramBytes: loaded.size_vram || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { getLLMClient, getSetting, setSetting, getAllSettings, testOpenAIKey, noThinkExtras, extendOllamaKeepAlive, getOllamaGpuResidency, DEFAULTS };

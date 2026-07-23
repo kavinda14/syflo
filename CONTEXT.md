@@ -1,8 +1,8 @@
-# FlowTalk
+# Syflo
 
 General-purpose branching-chat app: one conversation can branch into a tree of focused
-sub-chats, navigable as a mind map. Distinct from **Syflo**, its research-focused sibling
-product, which serves as the source of ported features.
+sub-chats, navigable as a mind map. Formerly named **FlowTalk**; selected features were
+ported from an earlier research-focused prototype (repo `syflo-2`).
 
 ## Language
 
@@ -16,9 +16,37 @@ connector lines (trunk + elbows).
 _Avoid_: chat list, history
 
 **Highlight**:
-A colored, persistent marking of a text passage in an uploaded PDF, created via the
-right-click menu. Five colors: yellow, green, blue, pink, orange.
+A colored, persistent marking of a text passage, created via the right-click menu.
+Five colors: yellow, green, blue, pink, orange. Two kinds sharing colors and labels:
+a **PDF highlight** (in the tree's PDF, anchored geometrically per page) and a
+**chat highlight** (in a chat message, anchored by character offsets so it survives
+reflow).
 _Avoid_: annotation, marking, Markierung
+
+**Ask in chat**:
+The popup action on a selection (PDF or chat text) that drops the selection into the
+**current** chat's composer as a removable **composer quote** — no branch is created
+(branching stays "Open as new chat"); sending renders the quote as a blockquote above
+the question.
+_Avoid_: quote to chat, reply with quote
+
+**Parent context**:
+The read-only rendering of a branch's parent chat in the center pane when the tree
+has no PDF — keeps the passage the branch came from visible. With a PDF attached the
+PDF keeps the center. Above it, the **ancestor chain** renders what the branch inherits.
+_Avoid_: context view (unqualified), preview pane
+
+**Ancestor context**:
+The conversational context a branch inherits from its path to the root (ADR-0003):
+the direct parent verbatim, grandparents+ as cached **chat summaries**, plus the
+`parent_word` chain. Never includes sibling branches.
+_Avoid_: parent context (that's the UI pane), history injection
+
+**Chat summary**:
+The cached ~120-word LLM summary of one chat (`chats.summary`), used as the inherited
+form of grandparents+ in the ancestor context. Kept live via a staleness check on the
+last covered message id; warmed up in the background when a branch is created.
+_Avoid_: digest, compression
 
 **Color label**:
 A user-editable name attached to one of the five highlight colors (e.g. "Important",
@@ -41,12 +69,55 @@ but its host blocks automated download), *paywalled* (no free copy; only a publi
 link is offered).
 _Avoid_: access status, lock state
 
+**Vision model**:
+A chat model that can read images, including text inside images (figures, screenshots,
+scans). For the local provider, only vision models are offered for selection — models
+without this ability are not selectable.
+_Avoid_: multimodal model (unqualified), OCR model
+
+**Model ladder**:
+The curated list of recommended vision models, one per machine-size class (small /
+medium / large). The ladder is the app's own opinion of what is good; it is independent
+of what happens to be installed.
+_Avoid_: model list (unqualified), presets
+
+**Recommended model**:
+The ladder rung matching the current machine's hardware. It becomes the default
+automatically once installed — unless the user has chosen a model manually; a manual
+choice always wins. A recommended model that is not yet downloaded can be seen and
+downloaded, but never activated before the download completes.
+_Avoid_: auto model, suggested model
+
 **Web search**:
 A tool call the chat model makes against the local SearXNG instance to pull live web
 results into the conversation. Not related to Paper search.
 _Avoid_: search (unqualified), SearXNG search
 
+**Thinking quote**:
+An entry of the curated quote pool (`frontend/src/components/ChatArea/quotes.json`)
+rotated in the thinking indicator while a reply is pending. Every quote — including
+hand-added ones — must pass the curation rules in `scripts/build-quotes.mjs`:
+genuinely famous author, fundamental truth (no politics, romance kitsch, or insider
+humor), PG-rated, no known misattribution. Rejected quotes/authors live in
+`scripts/quotes-blocklist.json` and stay excluded on rebuilds.
+_Avoid_: tip (that's the feature hints), loading message
+
+**Custom instructions**:
+User-authored free text, managed in Settings, injected into the system prompt of every
+chat reply (and its warm-up). Global — one text for all chat trees — and switchable
+on/off without deleting the text. Does not apply to Explain, chat titles, or chat
+summaries.
+_Avoid_: persona, personalization, system prompt (that's the whole assembled prompt)
+
 **Syflo**:
-The separate, research-focused sibling product (own repo, own roadmap). FlowTalk ports
-selected features from it but does not track it.
-_Avoid_: SciFlow, Ciflow (voice-transcript artifacts)
+This product (formerly **FlowTalk**; repo renamed 2026-07-18). Not to be confused with
+the earlier research-focused prototype living in repo `syflo-2`, from which selected
+features were ported.
+_Avoid_: SciFlow, Ciflow (voice-transcript artifacts), FlowTalk (old name)
+
+**Dictation**:
+Voice input in the chat composer: while recording, speech is buffered; on stop the
+whole transcript is inserted into the composer as one block. Understands German and
+English — including mixed sentences — and transcribes on-device; audio never leaves
+the machine.
+_Avoid_: voice input (unqualified), speech-to-text (that's the mechanism, not the feature)
